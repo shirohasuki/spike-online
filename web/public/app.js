@@ -636,7 +636,9 @@ document.addEventListener('keydown', (e) => {
 function initializeToolPanels() {
     // 工具按钮事件监听
     document.querySelectorAll('.tool-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             const tool = btn.dataset.tool;
             toggleToolPanel(tool);
         });
@@ -651,17 +653,31 @@ function initializeToolPanels() {
     });
 }
 
+// 防抖变量
+let toggleInProgress = false;
+
 // 切换工具面板
 function toggleToolPanel(toolName) {
+    if (toggleInProgress) {
+        return;
+    }
+    
+    toggleInProgress = true;
+    
     const panel = document.getElementById(`${toolName}-panel`);
     const defaultView = document.getElementById('default-view');
     const toolBtn = document.querySelector(`[data-tool="${toolName}"]`);
     
-    if (panel.style.display === 'none' || !panel.style.display) {
+    // 检查面板是否真正可见
+    const isVisible = panel && window.getComputedStyle(panel).display !== 'none';
+    
+    if (panel && !isVisible) {
         // 显示面板
-        // 先隐藏所有其他面板
+        // 先隐藏所有其他面板（但不包括当前要显示的面板）
         document.querySelectorAll('.tool-panel').forEach(p => {
-            p.style.display = 'none';
+            if (p !== panel) {
+                p.style.display = 'none';
+            }
         });
         document.querySelectorAll('.tool-btn').forEach(b => {
             b.classList.remove('active');
@@ -679,11 +695,40 @@ function toggleToolPanel(toolName) {
             renderIntegerRegisters();
             renderFloatRegisters();
             renderCSRRegisters();
+        } else if (toolName === 'cpu-monitor') {
+            if (typeof cpuMonitor !== 'undefined' && cpuMonitor !== null) {
+                cpuMonitor.start();
+                cpuMonitor.render();
+            } else {
+                // 尝试创建新实例
+                if (typeof CPUMonitor !== 'undefined') {
+                    cpuMonitor = new CPUMonitor();
+                    cpuMonitor.start();
+                    cpuMonitor.render();
+                } else {
+                    // 在面板中显示错误信息
+                    const panelContent = panel.querySelector('.panel-content');
+                    if (panelContent) {
+                        panelContent.innerHTML = `
+                            <div style="padding: 20px; text-align: center; color: #dc3545;">
+                                <h3>❌ CPU监控器加载失败</h3>
+                                <p>CPUMonitor类未定义，请检查脚本文件是否正确加载。</p>
+                                <p>请尝试刷新页面或检查控制台错误信息。</p>
+                            </div>
+                        `;
+                    }
+                }
+            }
         }
-    } else {
+        } else if (panel) {
         // 隐藏面板
         closeToolPanel(toolName);
     }
+    
+    // 重置防抖标志
+    setTimeout(() => {
+        toggleInProgress = false;
+    }, 100);
 }
 
 // 关闭工具面板
@@ -694,6 +739,11 @@ function closeToolPanel(toolName) {
     
     panel.style.display = 'none';
     toolBtn.classList.remove('active');
+    
+    // 如果是CPU监控器，停止它
+    if (toolName === 'cpu-monitor' && typeof cpuMonitor !== 'undefined' && cpuMonitor !== null) {
+        cpuMonitor.stop();
+    }
     
     // 如果没有其他面板显示，则显示默认视图
     const hasVisiblePanel = Array.from(document.querySelectorAll('.tool-panel')).some(p => 
@@ -734,7 +784,8 @@ function initializeResizeHandle() {
             const deltaX = e.clientX - startX;
             const containerWidth = containerRect.width;
             const sidebarWidth = 300;
-            const handleWidth = 5;
+            const leftHandleWidth = 5;
+            const rightHandleWidth = 5;
             const minMainWidth = 300;
             const minLogWidth = 200;
             
@@ -744,16 +795,16 @@ function initializeResizeHandle() {
             // 限制最小宽度
             if (newMainWidth < minMainWidth) {
                 newMainWidth = minMainWidth;
-                newLogWidth = containerWidth - sidebarWidth - handleWidth - newMainWidth;
+                newLogWidth = containerWidth - sidebarWidth - leftHandleWidth - rightHandleWidth - newMainWidth;
             }
             
             if (newLogWidth < minLogWidth) {
                 newLogWidth = minLogWidth;
-                newMainWidth = containerWidth - sidebarWidth - handleWidth - newLogWidth;
+                newMainWidth = containerWidth - sidebarWidth - leftHandleWidth - rightHandleWidth - newLogWidth;
             }
             
-            // 更新grid布局
-            mainContainer.style.gridTemplateColumns = `${sidebarWidth}px ${newMainWidth}px ${handleWidth}px ${newLogWidth}px`;
+            // 更新grid布局 - 5列布局：sidebar leftHandle main rightHandle log
+            mainContainer.style.gridTemplateColumns = `${sidebarWidth}px ${leftHandleWidth}px ${newMainWidth}px ${rightHandleWidth}px ${newLogWidth}px`;
         }
         
         function handleMouseUp() {
@@ -834,4 +885,58 @@ function initializeLeftResizeHandle() {
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('mouseup', handleMouseUp);
     });
-} 
+}
+
+// 创建CPU监控器实例（在DOMContentLoaded后创建）
+let cpuMonitor = null;
+
+// 更新调试器状态，包含CPU监控器
+function updateDebuggerState() {
+    // 从服务器获取真实的性能数据
+    if (cpuMonitor && cpuMonitor.isRunning && typeof socket !== 'undefined') {
+        socket.emit('get-performance-stats');
+    }
+}
+
+// 处理服务器返回的性能数据
+function initializeSocketHandlers() {
+    if (typeof socket !== 'undefined') {
+        socket.on('performance-stats', (stats) => {
+            if (cpuMonitor && cpuMonitor.isRunning) {
+                cpuMonitor.updateFromState(stats);
+                cpuMonitor.refreshUI();
+            }
+        });
+    }
+}
+
+// 初始化应用
+document.addEventListener('DOMContentLoaded', function() {
+    // 初始化所有面板
+    initializeToolPanels();
+    initializeResizeHandle();
+    initializeLeftResizeHandle();
+    
+    // 创建CPU监控器实例
+    if (typeof CPUMonitor !== 'undefined') {
+        cpuMonitor = new CPUMonitor();
+        console.log('CPU监控器已创建');
+    } else {
+        console.error('CPUMonitor类未找到');
+    }
+    
+    // 初始化Socket连接
+    initializeSocket();
+    
+    // 初始化Socket处理器
+    initializeSocketHandlers();
+    
+    // 设置定期更新（演示用）
+    setInterval(() => {
+        if (cpuMonitor && cpuMonitor.isRunning) {
+            updateDebuggerState();
+        }
+    }, 1000); // 每秒更新一次
+    
+    console.log('Spike调试器应用已初始化');
+}); 

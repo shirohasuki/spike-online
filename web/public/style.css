@@ -340,6 +340,24 @@ body {
     gap: 1rem;
 }
 
+/* CPU监控器面板控制按钮 */
+.cpu-monitor-controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.cpu-monitor-controls .btn {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+}
+
+.cpu-monitor-controls .btn i {
+    font-size: 0.75rem;
+}
+
 .close-panel-btn {
     background: none;
     border: none;
@@ -424,6 +442,302 @@ body {
     flex: 1;
     overflow: auto;
     padding: 1rem;
+}
+
+/* CPU监控器面板特殊样式 */
+#cpu-monitor-panel .panel-content {
+    overflow-y: auto;
+    overflow-x: hidden;
+    max-height: calc(100vh - 220px);
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent-color) var(--light-bg);
+    padding-bottom: 50px; /* 确保底部有足够空间 */
+}
+
+/* CPU监控器内容区域 */
+.cpu-monitor-content {
+    min-height: 100%;
+}
+
+/* CPU监控器内容区域样式调整 */
+.cpu-monitor-content {
+    padding: 15px;
+}
+
+/* CPU监控器内容样式 */
+.cpu-monitor-content h5 {
+    color: var(--primary-color);
+    margin: 15px 0 8px 0;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 性能指标网格 */
+.metrics-section {
+    margin-bottom: 20px;
+}
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.metric-card {
+    background: var(--lighter-bg);
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    text-align: center;
+}
+
+.metric-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+}
+
+.metric-value {
+    font-size: 24px;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+/* 缓存性能样式 */
+.cache-section {
+    margin-bottom: 20px;
+}
+
+.cache-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.cache-card {
+    background: var(--lighter-bg);
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.cache-title {
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: var(--text-primary);
+}
+
+.cache-stats {
+    margin-bottom: 10px;
+}
+
+.cache-stat {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    font-size: 14px;
+}
+
+.cache-value {
+    font-weight: bold;
+    color: var(--accent-color);
+}
+
+.cache-value.miss {
+    color: var(--register-changed);
+}
+
+.cache-bar {
+    background: var(--light-bg);
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.cache-bar-fill {
+    background: var(--accent-color);
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+/* 指令区间样式 */
+.regions-section {
+    margin-bottom: 20px;
+}
+
+.regions-list {
+    margin-top: 10px;
+}
+
+.region-item {
+    background: var(--lighter-bg);
+    padding: 12px;
+    margin-bottom: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.region-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.region-range {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+    font-weight: bold;
+}
+
+.region-cpi {
+    background: var(--accent-color);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.region-stats {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.region-bar {
+    background: var(--light-bg);
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.region-bar-fill {
+    background: linear-gradient(90deg, var(--accent-color), var(--primary-color));
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+/* 热点分析样式 */
+.hotspots-section {
+    margin-bottom: 15px;
+}
+
+.hotspots-list {
+    margin-top: 10px;
+}
+
+.hotspot-item {
+    background: var(--lighter-bg);
+    padding: 10px;
+    margin-bottom: 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.hotspot-pc {
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    color: var(--primary-color);
+    margin-bottom: 6px;
+    font-size: 13px;
+}
+
+.hotspot-stats {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.hotspot-bar {
+    background: var(--light-bg);
+    height: 3px;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.hotspot-bar-fill {
+    background: linear-gradient(90deg, var(--register-changed), #ff6b6b);
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+/* 监控状态区域样式 */
+.status-section {
+    margin-bottom: 10px;
+}
+
+/* 监控状态样式 */
+.monitor-status {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 15px;
+    background: var(--lighter-bg);
+    border-radius: 8px;
+    border: 2px solid var(--accent-color);
+    margin-top: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    min-height: 80px;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    min-height: 24px;
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    margin: 2px 0;
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.status-indicator.recording {
+    background: var(--accent-color);
+    animation: pulse 2s infinite;
+}
+
+.status-indicator.stopped {
+    background: var(--text-muted);
+}
+
+.status-label {
+    color: var(--text-secondary);
+}
+
+.status-value {
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+.no-data {
+    text-align: center;
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 20px;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
 }
 
 /* 寄存器面板 */
@@ -923,4 +1237,77 @@ body {
 
 .left-resize-handle:hover {
     background: var(--accent-color);
+}
+
+/* CPU监控器简化样式 */
+.cpu-monitor-content {
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    margin: 10px 0;
+}
+
+.cpu-monitor-content h4 {
+    margin: 0 0 15px 0;
+    color: #2c3e50;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.monitor-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 15px;
+    background: white;
+    padding: 12px;
+    border-radius: 4px;
+    border: 1px solid #dee2e6;
+}
+
+.monitor-stats .stat {
+    font-size: 13px;
+    color: #495057;
+    padding: 4px 0;
+    border-bottom: 1px solid #f1f3f4;
+}
+
+.monitor-stats .stat:last-child {
+    border-bottom: none;
+}
+
+.monitor-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.monitor-controls button {
+    padding: 6px 12px;
+    font-size: 12px;
+    border: 1px solid #dee2e6;
+    background: white;
+    color: #495057;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.monitor-controls button:hover {
+    background: #f8f9fa;
+    border-color: #adb5bd;
+}
+
+
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .monitor-stats {
+        grid-template-columns: 1fr;
+    }
+    
+    .monitor-controls {
+        flex-direction: column;
+    }
 } 

@@ -123,6 +123,9 @@
                 <button id="toggle-code" class="tool-btn" data-tool="code">
                     <i class="fas fa-code"></i> <span data-i18n="disassembly">反汇编</span>
                 </button>
+                <button id="toggle-cpu-monitor" class="tool-btn" data-tool="cpu-monitor">
+                    <i class="fas fa-chart-line"></i> <span data-i18n="CPU监控">CPU监控</span>
+                </button>
             </div>
 
             <!-- 寄存器视图 (隐藏) -->
@@ -212,6 +215,32 @@
                 </div>
             </div>
 
+            <!-- CPU监控器面板 -->
+            <div id="cpu-monitor-panel" class="view-panel tool-panel" style="display: none;">
+                <div class="panel-header">
+                    <h3><i class="fas fa-chart-line"></i> <span data-i18n="CPU监控">CPU性能监控</span></h3>
+                    <div class="panel-controls">
+                        <div class="cpu-monitor-controls">
+                            <button id="cpu-monitor-toggle" class="btn btn-primary btn-small">
+                                <i class="fas fa-play"></i> <span>开始监控</span>
+                            </button>
+                            <button id="cpu-monitor-reset" class="btn btn-secondary btn-small">
+                                <i class="fas fa-redo"></i> <span>重置</span>
+                            </button>
+                            <button id="cpu-monitor-export" class="btn btn-secondary btn-small">
+                                <i class="fas fa-download"></i> <span>导出</span>
+                            </button>
+                        </div>
+                        <button class="close-panel-btn" data-panel="cpu-monitor">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="panel-content">
+                    <!-- CPU监控器内容将由 JavaScript 生成 -->
+                </div>
+            </div>
+
             <!-- 默认显示区域 -->
             <div id="default-view" class="default-view">
                 <div class="welcome-message">
@@ -254,6 +283,7 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="lang.js"></script>
+    <script src="src/cpu-monitor.js"></script>
     <script src="app.js"></script>
 </body>
 </html> 
