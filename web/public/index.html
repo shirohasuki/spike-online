@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spike RISC-V 调试器</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <header class="main-header">
+        <div class="header-left">
+            <h1><i class="fas fa-microchip"></i> <span data-i18n="app.title">Spike RISC-V 调试器</span></h1>
+        </div>
+        <div class="header-right">
+            <div class="status-bar">
+                <div id="connection-status" class="status disconnected" data-i18n="disconnected">未连接</div>
+                <div id="debug-status" class="status not-debugging" data-i18n="not-debugging">未调试</div>
+            </div>
+            <div class="lang-switcher">
+                <button class="lang-btn active" data-lang="zh">中文</button>
+                <button class="lang-btn" data-lang="en">English</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <!-- 左侧控制面板 -->
+        <aside class="control-panel">
+            <!-- 程序加载 -->
+            <section class="config-section">
+                <h3><i class="fas fa-file-code"></i> <span data-i18n="config.program">程序加载</span></h3>
+                <div class="file-loader">
+                    <input type="file" id="elf-file-input" accept=".elf,.out" style="display: none;">
+                    <button id="load-file-btn" class="btn btn-primary">
+                        <i class="fas fa-folder-open"></i> <span data-i18n="load.file">选择ELF文件</span>
+                    </button>
+                    <div id="file-info" class="file-info" style="display: none;">
+                        <i class="fas fa-file"></i>
+                        <span id="file-name"></span>
+                        <button id="clear-file-btn" class="btn-small">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 调试控制 -->
+            <section class="control-section">
+                <h3><i class="fas fa-play-circle"></i> <span data-i18n="debug.control">调试控制</span></h3>
+                <div class="debug-controls">
+                    <button id="start-btn" class="btn btn-primary" disabled>
+                        <i class="fas fa-play"></i> <span data-i18n="start">开始</span>
+                    </button>
+                    <button id="pause-btn" class="btn btn-warning" disabled>
+                        <i class="fas fa-pause"></i> <span data-i18n="pause">暂停</span>
+                    </button>
+                    <button id="step-btn" class="btn btn-secondary" disabled>
+                        <i class="fas fa-step-forward"></i> <span data-i18n="step">单步</span>
+                    </button>
+                    <button id="reset-btn" class="btn btn-danger" disabled>
+                        <i class="fas fa-redo"></i> <span data-i18n="reset">重置</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- 执行状态 -->
+            <section class="status-section">
+                <h3><i class="fas fa-info-circle"></i> <span data-i18n="execution.status">执行状态</span></h3>
+                <div class="status-info">
+                    <div class="status-item">
+                        <label data-i18n="pc">程序计数器:</label>
+                        <span id="pc-value" class="value">0x00000000</span>
+                    </div>
+                    <div class="status-item">
+                        <label data-i18n="instruction.count">指令计数:</label>
+                        <span id="inst-count" class="value">0</span>
+                    </div>
+                    <div class="status-item">
+                        <label data-i18n="current.instruction">当前指令:</label>
+                        <span id="current-inst" class="value">-</span>
+                    </div>
+                    <div class="status-item">
+                        <label data-i18n="privilege.level">特权级:</label>
+                        <span id="priv-level" class="value">Machine</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 调试选项 -->
+            <section class="options-section">
+                <h3><i class="fas fa-cogs"></i> <span data-i18n="debug.options">调试选项</span></h3>
+                <div class="option-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="auto-step" checked>
+                        <span data-i18n="auto.step">自动单步调试</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="show-log">
+                        <span data-i18n="show.log">显示执行日志</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="show-memory">
+                        <span data-i18n="show.memory">显示内存访问</span>
+                    </label>
+                </div>
+            </section>
+        </aside>
+
+        <!-- 左侧拖拽分隔条 -->
+        <div class="left-resize-handle" id="left-resize-handle"></div>
+
+        <!-- 中间主视图区域 -->
+        <section class="main-view">
+            <!-- 工具面板控制 -->
+            <div class="tool-panel-controls">
+                <button id="toggle-registers" class="tool-btn" data-tool="registers">
+                    <i class="fas fa-list"></i> <span data-i18n="registers">寄存器</span>
+                </button>
+                <button id="toggle-memory" class="tool-btn" data-tool="memory">
+                    <i class="fas fa-memory"></i> <span data-i18n="memory">内存</span>
+                </button>
+                <button id="toggle-code" class="tool-btn" data-tool="code">
+                    <i class="fas fa-code"></i> <span data-i18n="disassembly">反汇编</span>
+                </button>
+            </div>
+
+            <!-- 寄存器视图 (隐藏) -->
+            <div id="registers-panel" class="view-panel tool-panel" style="display: none;">
+                <div class="panel-header">
+                    <h3><i class="fas fa-list"></i> <span data-i18n="registers">寄存器</span></h3>
+                    <div class="panel-controls">
+                        <div class="register-tabs">
+                            <button class="tab-btn active" data-tab="integer">
+                                <span data-i18n="integer.regs">整数寄存器</span>
+                            </button>
+                            <button class="tab-btn" data-tab="float">
+                                <span data-i18n="float.regs">浮点寄存器</span>
+                            </button>
+                            <button class="tab-btn" data-tab="csr">
+                                <span data-i18n="csr.regs">控制寄存器</span>
+                            </button>
+                        </div>
+                        <button class="close-panel-btn" data-panel="registers">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="panel-content">
+                    <div id="integer-regs" class="register-grid active">
+                        <!-- 整数寄存器内容将由 JavaScript 生成 -->
+                    </div>
+                    <div id="float-regs" class="register-grid">
+                        <!-- 浮点寄存器内容将由 JavaScript 生成 -->
+                    </div>
+                    <div id="csr-regs" class="register-grid">
+                        <!-- 控制寄存器内容将由 JavaScript 生成 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 内存视图 (隐藏) -->
+            <div id="memory-panel" class="view-panel tool-panel" style="display: none;">
+                <div class="panel-header">
+                    <h3><i class="fas fa-memory"></i> <span data-i18n="memory">内存</span></h3>
+                    <div class="panel-controls">
+                        <div class="memory-controls">
+                            <input type="text" id="memory-address" placeholder="0x10000000" 
+                                   data-i18n-placeholder="memory.address">
+                            <button id="goto-memory" class="btn btn-small">
+                                <span data-i18n="goto">跳转</span>
+                            </button>
+                        </div>
+                        <button class="close-panel-btn" data-panel="memory">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="panel-content">
+                    <div id="memory-view" class="memory-view">
+                        <div class="memory-header">
+                            <span data-i18n="address">地址</span>
+                            <span data-i18n="hex.data">十六进制数据</span>
+                            <span data-i18n="ascii">ASCII</span>
+                        </div>
+                        <div id="memory-content" class="memory-content">
+                            <!-- 内存内容将由 JavaScript 生成 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 代码视图 (隐藏) -->
+            <div id="code-panel" class="view-panel tool-panel" style="display: none;">
+                <div class="panel-header">
+                    <h3><i class="fas fa-code"></i> <span data-i18n="disassembly">反汇编</span></h3>
+                    <div class="panel-controls">
+                        <div class="code-controls">
+                            <button id="auto-follow" class="btn btn-small active">
+                                <i class="fas fa-crosshairs"></i> <span data-i18n="follow.pc">跟随PC</span>
+                            </button>
+                        </div>
+                        <button class="close-panel-btn" data-panel="code">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="panel-content">
+                    <div id="code-view" class="code-view">
+                        <!-- 反汇编代码将由 JavaScript 生成 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 默认显示区域 -->
+            <div id="default-view" class="default-view">
+                <div class="welcome-message">
+                    <i class="fas fa-microchip fa-3x"></i>
+                    <h2 data-i18n="welcome.title">欢迎使用 Spike RISC-V 调试器</h2>
+                    <p data-i18n="welcome.message">请加载ELF文件并选择工具面板开始调试</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- 拖拽分隔条 -->
+        <div class="resize-handle" id="resize-handle"></div>
+
+        <!-- 右侧日志视图 -->
+        <section class="right-panel">
+            <!-- 日志视图 -->
+            <div class="view-panel log-panel">
+                <div class="panel-header">
+                    <h3><i class="fas fa-terminal"></i> <span data-i18n="execution.log">执行日志</span></h3>
+                    <button id="clear-log" class="btn btn-small">
+                        <i class="fas fa-eraser"></i> <span data-i18n="clear">清空</span>
+                    </button>
+                </div>
+                <div class="panel-content">
+                    <div id="log-view" class="log-view">
+                        <!-- 执行日志将由 JavaScript 生成 -->
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- 加载中遮罩 -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <p data-i18n="loading">正在加载...</p>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="lang.js"></script>
+    <script src="app.js"></script>
+</body>
+</html> 
