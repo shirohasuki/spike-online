@@ -291,6 +291,7 @@ void sim_t::interactive()
   funcs["q"] = funcs["quit"];
   funcs["help"] = &sim_t::interactive_help;
   funcs["h"] = funcs["help"];
+  funcs["perf"] = &sim_t::interactive_perf;
 
   while (!done())
   {
@@ -377,6 +378,7 @@ void sim_t::interactive_help(const std::string& cmd, const std::vector<std::stri
     "dump                            # Dump physical memory to binary files\n"
     "mtime                           # Show mtime\n"
     "mtimecmp <core>                 # Show mtimecmp for <core>\n"
+    "perf <core>                     # Show performance counters for <core>\n"
     "until reg <core> <reg> <val>    # Stop when <reg> in <core> hits <val>\n"
     "untiln reg <core> <reg> <val>   # Run noisy and stop when <reg> in <core> hits <val>\n"
     "until pc <core> <val>           # Stop when PC in <core> hits <val>\n"
@@ -839,4 +841,23 @@ void sim_t::interactive_mtimecmp(const std::string& cmd, const std::vector<std::
   std::ostream out(sout_.rdbuf());
   out << std::hex << std::setfill('0') << "0x" << std::setw(16)
       << clint->get_mtimecmp(p->get_id()) << std::endl;
+}
+
+void sim_t::interactive_perf(const std::string& cmd, const std::vector<std::string>& args)
+{
+  if (args.size() != 1)
+    throw trap_interactive();
+
+  processor_t *p = get_core(args[0]);
+  const auto& perf_counters = p->get_performance_counters();
+  
+  std::ostream out(sout_.rdbuf());
+  out << "Performance Counters for Core " << args[0] << ":" << std::endl;
+  out << "icache_accesses: " << perf_counters.icache_accesses << std::endl;
+  out << "icache_misses: " << perf_counters.icache_misses << std::endl;
+  out << "dcache_accesses: " << perf_counters.dcache_accesses << std::endl;
+  out << "dcache_misses: " << perf_counters.dcache_misses << std::endl;
+  out << "total_memory_accesses: " << perf_counters.total_memory_accesses << std::endl;
+  out << "stall_cycles: " << perf_counters.stall_cycles << std::endl;
+  out << "memory_access_cycles: " << perf_counters.memory_access_cycles << std::endl;
 }

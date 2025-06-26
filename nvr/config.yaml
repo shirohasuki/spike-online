@@ -1,0 +1,37 @@
+# Cache Configuration
+# Based on Rocket Core L1 cache and 256KB L2 cache
+
+# Cache hierarchy configuration for Spike simulator
+
+l1_icache:
+  size: 16384      # 16KB
+  ways: 4          # 4-way associative
+  line_size: 64    # 64-byte cache line
+
+l1_dcache:
+  size: 16384      # 16KB
+  ways: 4          # 4-way associative
+  line_size: 64    # 64-byte cache line
+
+l2_cache:
+  size: 262144     # 256KB
+  ways: 8          # 8-way associative
+  line_size: 64    # 64-byte cache line
+
+# Memory hierarchy latencies (cycles)
+latencies:
+  l1_hit: 1        # L1 cache hit latency
+  l2_hit: 8        # L2 cache hit latency
+  memory: 100      # Memory access latency
+
+# 路径配置
+paths:
+  workload: "workload"      # 工作负载源文件目录
+  binary: "binary"          # 编译生成的可执行文件目录
+  output: "output"          # 输出文件夹
+  
+# 文件名配置
+filenames:
+  profile_json: "profile.json"         # 性能统计JSON文件
+  profile_csv: "profile.csv"           # 分析后的CSV文件  
+  profile_html: "profile.html"         # HTML报告文件

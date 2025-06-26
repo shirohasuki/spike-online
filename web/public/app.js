@@ -36,6 +36,7 @@ class DebuggerState {
 // 全局变量
 let socket = null;
 let debugState = new DebuggerState();
+let elfAnalyzerUI = null;
 
 // Socket.IO 连接
 function initializeSocket() {
@@ -46,6 +47,11 @@ function initializeSocket() {
         debugState.connected = true;
         debugState.updateStatus();
         enableControls();
+    });
+    
+    socket.on('connection-confirmed', (data) => {
+        console.log('Connection confirmed:', data);
+        addLogEntry('info', `🔗 已连接到服务器 (${data.socketId.substring(0, 8)}...)`);
     });
     
     socket.on('disconnect', () => {
@@ -90,12 +96,15 @@ function initializeSocket() {
         updateMemory(data);
     });
     
-    socket.on('pc-update', (data) => {
-        updatePC(data);
-    });
-    
-    socket.on('instruction-update', (data) => {
-        updateCurrentInstruction(data);
+    socket.on('execution-update', (data) => {
+        debugState.pc = data.pc;
+        debugState.instructionCount = data.count;
+        debugState.currentInstruction = data.current;
+        updateExecutionStatus();
+        highlightCurrentCode();
+        
+        // 通知后端前端已处理完成，可以继续下一条指令
+        socket.emit('frontend-ready');
     });
     
     socket.on('code-update', (data) => {
@@ -115,49 +124,27 @@ function handleDebugOutput(data) {
     addLogEntry(type, message, timestamp);
 }
 
-// 解析执行日志
+// 解析执行日志（仅用于ELF分析器）
 function parseExecutionLog(logLine) {
-    // 匹配任何core行
+    // 匹配core执行行
     let match = logLine.match(/^core\s+(\d+):\s+(?:(\d+)\s+)?(0x[0-9a-fA-F]+)\s+\((0x[0-9a-fA-F]+)\)\s*(.*)$/);
     if (match) {
         const [, core, priv, pc, instruction, disasm] = match;
         
-        // 如果有特权级数字，更新特权级信息
-        if (priv) {
-            debugState.privilegeLevel = priv === '3' ? 'Machine' : priv === '1' ? 'Supervisor' : 'User';
-        }
-        
-        // 检查反汇编内容
         if (disasm && disasm.trim()) {
-            const trimmedDisasm = disasm.trim();
+            const pcAddr = parseInt(pc, 16);
             
-            // 检查是否是寄存器/内存信息行
-            const isRegisterMemoryInfo = trimmedDisasm.match(/^(x\d+|f\d+|c\d+_\w+)\s+0x[0-9a-fA-F]+$/) || 
-                                       trimmedDisasm.match(/^mem\s+0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+$/) ||
-                                       trimmedDisasm === 'mem';
-            
-            if (isRegisterMemoryInfo) {
-                console.log('Skipping register/memory info:', trimmedDisasm);
-                updateExecutionStatus(); // 只更新特权级等状态
-                return;
-            }
-            
-            // 只有没有特权级数字的行才可能是指令行
-            if (!priv) {
-                console.log('Found instruction (no privilege level):', trimmedDisasm);
-                debugState.pc = parseInt(pc, 16);
-                debugState.currentInstruction = trimmedDisasm;
-                debugState.instructionCount++;
+            // 只记录指令执行到ELF分析器，不更新调试状态（避免重复）
+            if (typeof elfAnalyzerUI !== 'undefined' && elfAnalyzerUI && elfAnalyzerUI.analyzer) {
+                elfAnalyzerUI.analyzer.recordInstructionExecution(pcAddr);
                 
-                updateExecutionStatus();
-                highlightCurrentCode();
-                return;
+                // 如果热点分析面板是活跃的，实时刷新显示
+                const elfPanel = document.getElementById('elf-analyzer-panel');
+                if (elfPanel && elfPanel.style.display !== 'none') {
+                    elfAnalyzerUI.refreshAllTabs();
+                }
             }
         }
-        
-        // 其他情况只更新状态
-        updateExecutionStatus();
-        return;
     }
 }
 
@@ -303,51 +290,6 @@ function updatePC(pc) {
     highlightCurrentCode();
 }
 
-// 更新当前指令
-function updateCurrentInstruction(instruction) {
-    debugState.currentInstruction = instruction;
-    updateExecutionStatus();
-}
-
-// 更新代码视图
-function updateCodeView(data) {
-    const { pc, instruction, disasm } = data;
-    const codeView = document.getElementById('code-view');
-    
-    // 查找现有的代码行
-    let codeLine = codeView.querySelector(`[data-pc="${pc.toString(16)}"]`);
-    
-    if (!codeLine) {
-        // 创建新的代码行
-        codeLine = document.createElement('div');
-        codeLine.className = 'code-line';
-        codeLine.setAttribute('data-pc', pc.toString(16));
-        
-        const lineNumber = codeView.children.length + 1;
-        codeLine.innerHTML = `
-            <span class="line-number">${lineNumber}</span>
-            <span class="line-address">0x${pc.toString(16).padStart(8, '0').toUpperCase()}</span>
-            <span class="line-instruction">${disasm}</span>
-        `;
-        
-        codeView.appendChild(codeLine);
-    }
-    
-    // 移除之前的当前行标记
-    codeView.querySelectorAll('.code-line.current').forEach(line => {
-        line.classList.remove('current');
-    });
-    
-    // 标记当前行
-    codeLine.classList.add('current');
-    
-    // 滚动到当前行（如果启用了跟随PC）
-    const autoFollow = document.getElementById('auto-follow');
-    if (autoFollow && autoFollow.classList.contains('active')) {
-        codeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-}
-
 // 高亮当前代码行
 function highlightCurrentCode() {
     // 移除之前的高亮
@@ -378,19 +320,34 @@ function addLogEntry(type, message, timestamp = new Date()) {
         
     entry.innerHTML = `<span class="timestamp">[${timeStr}]</span> ${message}`;
     
-    logView.appendChild(entry);
-    logView.scrollTop = logView.scrollHeight;
-    
-    // 限制日志条目数量
-    if (logView.children.length > 1000) {
-        logView.removeChild(logView.firstChild);
+    // 检查是否需要删除旧条目（增加限制到5000条以提高性能）
+    if (logView.children.length >= 5000) {
+        // 批量删除前1000条以提高性能
+        for (let i = 0; i < 1000; i++) {
+            if (logView.firstChild) {
+                logView.removeChild(logView.firstChild);
+            }
+        }
     }
+    
+    logView.appendChild(entry);
+    
+    // 强制滚动到底部，使用 requestAnimationFrame 确保DOM更新后执行
+    requestAnimationFrame(() => {
+        logView.scrollTop = logView.scrollHeight;
+        // 二次确保滚动到底部
+        setTimeout(() => {
+            if (logView.scrollTop < logView.scrollHeight - logView.clientHeight - 10) {
+                logView.scrollTop = logView.scrollHeight;
+            }
+        }, 10);
+    });
 }
 
 // 控制按钮管理
 function enableControls() {
     const startBtn = document.getElementById('start-btn');
-    const loadBtn = document.getElementById('load-file-btn');
+            const loadBtn = document.getElementById('load-btn');
     
     if (debugState.currentFile) {
         startBtn.disabled = false;
@@ -437,11 +394,11 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeSocket();
     
     // 文件加载和上传
-    const fileInput = document.getElementById('elf-file-input');
-    const loadBtn = document.getElementById('load-file-btn');
+    const fileInput = document.getElementById('file-input');
+    const loadBtn = document.getElementById('load-btn');
     const fileInfo = document.getElementById('file-info');
     const fileName = document.getElementById('file-name');
-    const clearBtn = document.getElementById('clear-file-btn');
+    const clearBtn = document.getElementById('clear-btn');
     
     loadBtn.addEventListener('click', () => {
         fileInput.click();
@@ -450,7 +407,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (file) {
-            // 显示上传中状态
+            // 显示上传状态
             fileName.textContent = `${t('file.uploading')}: ${file.name}`;
             fileInfo.style.display = 'flex';
             loadBtn.disabled = true;
@@ -472,12 +429,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     debugState.originalFileName = result.originalName;
                     fileName.textContent = result.originalName;
                     updateControlButtons();
+                    clearBtn.disabled = false;
                     addLogEntry('info', `${t('file.uploaded')}: ${result.originalName}`);
                 } else {
                     throw new Error(result.error || 'Upload failed');
                 }
             } catch (error) {
-                console.error('File upload error:', error);
                 addLogEntry('error', `${t('file.upload.failed')}: ${error.message}`);
                 fileInfo.style.display = 'none';
                 debugState.currentFile = null;
@@ -492,6 +449,7 @@ document.addEventListener('DOMContentLoaded', () => {
         debugState.originalFileName = null;
         fileInput.value = '';
         fileInfo.style.display = 'none';
+        clearBtn.disabled = true;
         updateControlButtons();
     });
     
@@ -569,6 +527,14 @@ document.addEventListener('DOMContentLoaded', () => {
     renderIntegerRegisters();
     renderFloatRegisters();
     renderCSRRegisters();
+    
+    // 初始化ELF分析器UI
+    if (typeof ELFAnalyzerUI !== 'undefined') {
+        window.elfAnalyzerUI = new ELFAnalyzerUI();
+        console.log('ELF分析器UI已初始化');
+    } else {
+        console.warn('ELFAnalyzerUI类未找到，请检查脚本加载');
+    }
     
     // 初始状态
     debugState.updateStatus();
@@ -719,8 +685,11 @@ function toggleToolPanel(toolName) {
                     }
                 }
             }
+        } else if (toolName === 'elf-analyzer') {
+            // ELF分析器已经通过其构造函数自动创建面板
+            console.log('ELF分析器面板已显示');
         }
-        } else if (panel) {
+    } else if (panel) {
         // 隐藏面板
         closeToolPanel(toolName);
     }
@@ -892,10 +861,33 @@ let cpuMonitor = null;
 
 // 更新调试器状态，包含CPU监控器
 function updateDebuggerState() {
-    // 从服务器获取真实的性能数据
-    if (cpuMonitor && cpuMonitor.isRunning && typeof socket !== 'undefined') {
-        socket.emit('get-performance-stats');
-    }
+    if (!socket) return;
+    
+    socket.emit('getDebuggerState', (response) => {
+        if (response.success) {
+            const data = response.data;
+            
+            // 更新基本状态
+            document.getElementById('current-pc').textContent = `0x${data.pc.toString(16)}`;
+            document.getElementById('instruction-count').textContent = data.instructionCount;
+            
+            // 更新CPU监控器
+            if (cpuMonitor && cpuMonitor.isRunning && data.performanceStats) {
+                cpuMonitor.updatePerformanceData(data.performanceStats);
+            }
+            
+            // 更新ELF分析器的性能数据（无论程序是否在运行）
+            if (elfAnalyzerUI && data.performanceStats) {
+                elfAnalyzerUI.updateAllPerformanceData(data.performanceStats);
+                
+                // 如果Instructions面板是活动的，刷新热点显示
+                const instructionsTab = document.querySelector('.tab-btn[data-tab="instructions"]');
+                if (instructionsTab && instructionsTab.classList.contains('active') && elfAnalyzerUI.analyzer) {
+                    elfAnalyzerUI.refreshHotspots();
+                }
+            }
+        }
+    });
 }
 
 // 处理服务器返回的性能数据
@@ -910,12 +902,123 @@ function initializeSocketHandlers() {
     }
 }
 
-// 初始化应用
+// 面板拖拽功能
+function makePanelDraggable(panel) {
+    const panelHeader = panel.querySelector('.panel-header');
+    if (!panelHeader) return;
+    
+    let isDragging = false;
+    let startX, startY, offsetX, offsetY;
+    
+    // 保存原始样式
+    const originalStyle = {
+        position: panel.style.position,
+        left: panel.style.left,
+        top: panel.style.top,
+        width: panel.style.width,
+        height: panel.style.height,
+        zIndex: panel.style.zIndex
+    };
+    
+    // 添加拖拽指示器
+    panelHeader.style.cursor = 'move';
+    panelHeader.style.userSelect = 'none';
+    
+    // 双击恢复原始位置
+    panelHeader.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.panel-controls')) return;
+        
+        // 恢复原始样式
+        Object.keys(originalStyle).forEach(key => {
+            if (originalStyle[key]) {
+                panel.style[key] = originalStyle[key];
+            } else {
+                panel.style[key] = '';
+            }
+        });
+        panel.classList.remove('dragging');
+    });
+    
+    panelHeader.addEventListener('mousedown', (e) => {
+        // 忽略控件按钮点击
+        if (e.target.closest('.panel-controls') || e.target.closest('button') || e.target.closest('select') || e.target.closest('input')) {
+            return;
+        }
+        
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        
+        const rect = panel.getBoundingClientRect();
+        offsetX = startX - rect.left;
+        offsetY = startY - rect.top;
+        
+        // 将面板设置为绝对定位
+        panel.style.position = 'absolute';
+        panel.style.zIndex = '9999';
+        panel.style.left = rect.left + 'px';
+        panel.style.top = rect.top + 'px';
+        panel.style.width = rect.width + 'px';
+        panel.style.height = rect.height + 'px';
+        
+        document.body.style.userSelect = 'none';
+        
+        // 添加拖拽样式
+        panel.classList.add('dragging');
+        
+        function handleMouseMove(e) {
+            if (!isDragging) return;
+            
+            const newX = e.clientX - offsetX;
+            const newY = e.clientY - offsetY;
+            
+            // 限制在视窗内
+            const maxX = window.innerWidth - panel.offsetWidth;
+            const maxY = window.innerHeight - panel.offsetHeight;
+            
+            panel.style.left = Math.max(0, Math.min(newX, maxX)) + 'px';
+            panel.style.top = Math.max(0, Math.min(newY, maxY)) + 'px';
+        }
+        
+        function handleMouseUp() {
+            isDragging = false;
+            document.body.style.userSelect = '';
+            panel.classList.remove('dragging');
+            
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        }
+        
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+    });
+}
+
+// 初始化所有面板的拖拽功能
+function initializePanelDragging() {
+    const draggablePanels = [
+        'code-panel',
+        'elf-analyzer-panel',
+        'registers-panel', 
+        'memory-panel',
+        'cpu-monitor-panel'
+    ];
+    
+    draggablePanels.forEach(panelId => {
+        const panel = document.getElementById(panelId);
+        if (panel) {
+            makePanelDraggable(panel);
+        }
+    });
+}
+
+// 更新初始化函数
 document.addEventListener('DOMContentLoaded', function() {
     // 初始化所有面板
     initializeToolPanels();
     initializeResizeHandle();
     initializeLeftResizeHandle();
+    initializePanelDragging(); // 添加面板拖拽初始化
     
     // 创建CPU监控器实例
     if (typeof CPUMonitor !== 'undefined') {
@@ -925,15 +1028,23 @@ document.addEventListener('DOMContentLoaded', function() {
         console.error('CPUMonitor类未找到');
     }
     
+    // 创建ELF分析器实例
+    if (typeof ELFAnalyzerUI !== 'undefined') {
+        elfAnalyzerUI = new ELFAnalyzerUI();
+        console.log('ELF分析器已创建');
+    } else {
+        console.error('ELFAnalyzerUI类未找到');
+    }
+    
     // 初始化Socket连接
     initializeSocket();
     
     // 初始化Socket处理器
     initializeSocketHandlers();
     
-    // 设置定期更新（演示用）
+    // 设置定期更新，只在程序运行时更新
     setInterval(() => {
-        if (cpuMonitor && cpuMonitor.isRunning) {
+        if (cpuMonitor && cpuMonitor.isRunning && debugState && debugState.debugging) {
             updateDebuggerState();
         }
     }, 1000); // 每秒更新一次

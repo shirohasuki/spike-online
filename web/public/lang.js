@@ -10,7 +10,8 @@ const translations = {
         
         // 程序加载
         'config.program': '程序加载',
-        'load.file': '选择ELF文件',
+        'load.filetile': '选择ELF文件',
+        'load.file': '上传',
         'file.loaded': '文件已加载',
         'file.uploading': '正在上传',
         'file.uploaded': '文件上传成功',
@@ -88,7 +89,8 @@ const translations = {
         
         // 程序加载
         'config.program': 'Program Loading',
-        'load.file': 'Choose ELF File',
+        'load.filetile': 'Choose ELF File',
+        'load.file': 'Upload',
         'file.loaded': 'File Loaded',
         'file.uploading': 'Uploading',
         'file.uploaded': 'File uploaded successfully',

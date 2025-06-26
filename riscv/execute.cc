@@ -5,7 +5,10 @@
 #include "mmu.h"
 #include "disasm.h"
 #include "decode_macros.h"
+#include "cache_model.h"
 #include <cassert>
+#include <vector>
+#include <cstdio>
 
 static void commit_log_reset(processor_t* p)
 {
@@ -153,14 +156,42 @@ static void commit_log_print_insn(processor_t *p, reg_t pc, insn_t insn)
 
 inline void processor_t::update_histogram(reg_t pc)
 {
-  if (histogram_enabled)
+  // 总是更新指令计数用于性能统计
     pc_histogram[pc]++;
 }
+
+// 性能监测：更新指令统计信息
+inline void processor_t::update_dcache_stats(insn_t insn)
+{
+  uint32_t opcode = insn.bits() & 0x7f;
+  bool is_mem_insn = (opcode == 0x03 || opcode == 0x23 || opcode == 0x2f);
+  
+  // 更新指令性能数据
+  auto& inst_perf = instruction_perf[state.pc];
+  inst_perf.executions++;
+  inst_perf.is_memory_insn = is_mem_insn;
+  
+  // 记录当前指令的cache miss信息
+  inst_perf.l1_cache_misses += current_instruction_l1_misses;
+  inst_perf.l2_cache_misses += current_instruction_l2_misses;
+  
+  // 基础指令周期数为1，加上cache延迟产生的额外周期
+  inst_perf.total_cycles += 1 + current_instruction_extra_cycles;
+  
+  // 重置当前指令的cache miss计数器
+  current_instruction_l1_misses = 0;
+  current_instruction_l2_misses = 0;
+  current_instruction_extra_cycles = 0;
+}
+
 
 // These two functions are expected to be inlined by the compiler separately in
 // the processor_t::step() loop. The logged variant is used in the slow path
 static inline reg_t execute_insn_fast(processor_t* p, reg_t pc, insn_fetch_t fetch) {
-  return fetch.func(p, fetch.insn, pc);
+  reg_t npc = fetch.func(p, fetch.insn, pc);
+  p->update_histogram(pc);
+  p->update_dcache_stats(fetch.insn);
+  return npc;
 }
 static inline reg_t execute_insn_logged(processor_t* p, reg_t pc, insn_fetch_t fetch)
 {
@@ -174,17 +205,22 @@ static inline reg_t execute_insn_logged(processor_t* p, reg_t pc, insn_fetch_t f
   try {
     npc = fetch.func(p, fetch.insn, pc);
     if (npc != PC_SERIALIZE_BEFORE) {
+      // 在commit_log_print_insn之前调用update_dcache_stats，确保能获取到内存访问日志
+      p->update_dcache_stats(fetch.insn);
       if (p->get_log_commits_enabled()) {
         commit_log_print_insn(p, pc, fetch.insn);
       }
      }
   } catch (wait_for_interrupt_t &t) {
+      // 在异常情况下也要调用update_dcache_stats
+      p->update_dcache_stats(fetch.insn);
       if (p->get_log_commits_enabled()) {
         commit_log_print_insn(p, pc, fetch.insn);
       }
       throw;
   } catch(mem_trap_t& t) {
       //handle segfault in midlle of vector load/store
+      p->update_dcache_stats(fetch.insn);
       if (p->get_log_commits_enabled()) {
         for (auto item : p->get_state()->log_reg_write) {
           if ((item.first & 3) == 3) {
@@ -367,9 +403,11 @@ void processor_t::step(size_t n)
     if (!(state.mcountinhibit->read() & MCOUNTINHIBIT_IR))
       state.minstret->bump(instret);
 
-    // Model a hart whose CPI is 1.
-    if (!(state.mcountinhibit->read() & MCOUNTINHIBIT_CY))
-      state.mcycle->bump(instret);
+    // Model a hart with cache-aware cycle counting
+    if (!(state.mcountinhibit->read() & MCOUNTINHIBIT_CY)) {
+      state.mcycle->bump(instret + extra_cycles);
+      extra_cycles = 0; // Reset extra cycles after adding them
+    }
 
     n -= instret;
   }

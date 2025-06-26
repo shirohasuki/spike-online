@@ -17,11 +17,13 @@
 #include <cstdlib>
 #include <iostream>
 #include <iomanip>
+#include <fstream>
 #include <assert.h>
 #include <limits.h>
 #include <stdexcept>
 #include <string>
 #include <algorithm>
+#include "cache_model.h"
 
 #ifdef __GNUC__
 # pragma GCC diagnostic ignored "-Wunused-variable"
@@ -79,6 +81,18 @@ processor_t::processor_t(const char* isa_str, const char* priv_str,
   set_impl(IMPL_MMU_ASID, true);
   set_impl(IMPL_MMU_VMID, true);
 
+  // Initialize cache hierarchy
+  const char* config_path = getenv("SPIKE_CONFIG_PATH");
+  if (!config_path) {
+    printf("Warning: SPIKE_CONFIG_PATH is not set.\n");
+    exit(1);
+  }
+  cache_hierarchy = cache_hierarchy_create_from_config(config_path);
+  extra_cycles = 0;
+  current_instruction_l1_misses = 0;
+  current_instruction_l2_misses = 0;
+  current_instruction_extra_cycles = 0;
+
   reset();
 }
 
@@ -93,6 +107,17 @@ processor_t::~processor_t()
     fprintf(stderr, "PC Histogram size:%zu\n", ordered_histo.size());
     for (auto it : ordered_histo)
       fprintf(stderr, "%0" PRIx64 " %" PRIu64 "\n", it.first, it.second);
+  }
+
+  // Export instruction performance profile to JSON with detailed cache info
+  if (!instruction_perf.empty()) {
+    std::string filename = "profile" + std::to_string(id) + ".json";
+    export_instruction_profile_to_json(filename);
+  }
+
+  // Cleanup cache hierarchy
+  if (cache_hierarchy) {
+    cache_hierarchy_destroy(cache_hierarchy);
   }
 
   delete mmu;
@@ -834,4 +859,103 @@ void processor_t::trigger_updated(const std::vector<triggers::trigger_t *> &trig
       check_triggers_icount = true;
     }
   }
+}
+
+// Export instruction performance data to JSON file
+void processor_t::simulate_cache_access(reg_t addr, bool is_write)
+{
+  if (cache_hierarchy) {
+    cache_result_t result = cache_hierarchy_access(cache_hierarchy, addr, 
+                                                   is_write ? CACHE_WRITE : CACHE_READ, false);
+
+    // 根据cache访问结果增加周期数
+    if (result.latency > 1) {
+      uint64_t extra_latency = result.latency - 1; // 减去1因为基础指令已经消耗1个周期
+      add_cycles(extra_latency);
+      current_instruction_extra_cycles += extra_latency; // 记录当前指令的额外周期
+    }
+    
+    // 更新性能计数器
+    auto& perf = const_cast<performance_counters_t&>(get_performance_counters());
+    perf.dcache_accesses++;
+    
+    if (result.l1_miss) {
+      perf.dcache_misses++;
+      current_instruction_l1_misses++;
+    }
+    
+    if (result.l2_miss) {
+      // L2统计会在cache_hierarchy中自动更新
+      current_instruction_l2_misses++;
+    }
+    
+    // 获取L2统计
+    perf.l2_accesses = cache_hierarchy->l2_cache->accesses;
+    perf.l2_misses = cache_hierarchy->l2_cache->misses;
+  } else {
+    printf("DEBUG: cache_hierarchy is NULL!\n");
+  }
+}
+
+void processor_t::export_instruction_profile_to_json(const std::string& filename)
+{
+  std::ofstream file(filename);
+  if (!file.is_open()) {
+    fprintf(stderr, "Error: Cannot open file %s for writing\n", filename.c_str());
+    return;
+  }
+
+  file << "{\n";
+  file << "  \"core_id\": " << id << ",\n";
+  file << "  \"total_instructions\": " << instruction_perf.size() << ",\n";
+  
+  // Performance counters
+  const auto& perf = get_performance_counters();
+  file << "  \"performance_counters\": {\n";
+  file << "    \"dcache_accesses\": " << perf.dcache_accesses << ",\n";
+  file << "    \"dcache_misses\": " << perf.dcache_misses << ",\n";
+  file << "    \"l2_accesses\": " << perf.l2_accesses << ",\n";
+  file << "    \"l2_misses\": " << perf.l2_misses << "\n";
+  file << "  },\n";
+  
+  // Instruction details
+  file << "  \"instructions\": [\n";
+  bool first = true;
+  for (const auto& entry : instruction_perf) {
+    if (!first) file << ",\n";
+    first = false;
+    
+    reg_t pc = entry.first;
+    const auto& perf_data = entry.second;
+    uint64_t exec_count = pc_histogram.count(pc) ? pc_histogram.at(pc) : 0;
+    
+    file << "    {\n";
+    file << "      \"pc\": \"0x" << std::hex << pc << "\",\n";
+    file << "      \"executions\": " << std::dec << exec_count << ",\n";
+    file << "      \"total_cycles\": " << perf_data.total_cycles << ",\n";
+    file << "      \"avg_cycles_per_execution\": ";
+    if (exec_count > 0) {
+      file << std::fixed << std::setprecision(2) << (double)perf_data.total_cycles / exec_count;
+    } else {
+      file << "0.0";
+    }
+    file << ",\n";
+    file << "      \"is_memory_instruction\": " << (perf_data.is_memory_insn ? "true" : "false");
+    if (perf_data.is_memory_insn) {
+      file << ",\n      \"l1_cache_misses\": " << perf_data.l1_cache_misses;
+      file << ",\n      \"l2_cache_misses\": " << perf_data.l2_cache_misses;
+      if (exec_count > 0) {
+        file << ",\n      \"l1_miss_rate\": " << std::fixed << std::setprecision(4) 
+             << (double)perf_data.l1_cache_misses / exec_count;
+        file << ",\n      \"l2_miss_rate\": " << std::fixed << std::setprecision(4) 
+             << (double)perf_data.l2_cache_misses / exec_count;
+      }
+    }
+    file << "\n    }";
+  }
+  file << "\n  ]\n";
+  file << "}\n";
+  
+  file.close();
+  printf("Instruction performance profile exported to %s\n", filename.c_str());
 }

@@ -88,6 +88,12 @@ public:
 
     if (likely(!xlate_flags.is_special_access() && aligned && tlb_hit)) {
       res = *(target_endian<T>*)(tlb_data[vpn % TLB_ENTRIES].host_offset + addr);
+      
+      // 快速路径：从TLB获取物理地址进行cache模拟
+      if (unlikely(proc != nullptr)) {
+        reg_t paddr = tlb_data[vpn % TLB_ENTRIES].target_offset + addr;
+        proc->simulate_cache_access(paddr, false); // false表示读访问
+      }
     } else {
       load_slow_path(addr, sizeof(T), (uint8_t*)&res, xlate_flags);
     }
@@ -129,6 +135,12 @@ public:
 
     if (!xlate_flags.is_special_access() && likely(aligned && tlb_hit)) {
       *(target_endian<T>*)(tlb_data[vpn % TLB_ENTRIES].host_offset + addr) = to_target(val);
+      
+      // 快速路径：从TLB获取物理地址进行cache模拟
+      if (unlikely(proc != nullptr)) {
+        reg_t paddr = tlb_data[vpn % TLB_ENTRIES].target_offset + addr;
+        proc->simulate_cache_access(paddr, true); // true表示写访问
+      }
     } else {
       target_endian<T> target_val = to_target(val);
       store_slow_path(addr, sizeof(T), (const uint8_t*)&target_val, xlate_flags, true, false);

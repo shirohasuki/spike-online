@@ -27,21 +27,21 @@
     <main class="main-container">
         <!-- 左侧控制面板 -->
         <aside class="control-panel">
-            <!-- 程序加载 -->
-            <section class="config-section">
-                <h3><i class="fas fa-file-code"></i> <span data-i18n="config.program">程序加载</span></h3>
-                <div class="file-loader">
-                    <input type="file" id="elf-file-input" accept=".elf,.out" style="display: none;">
-                    <button id="load-file-btn" class="btn btn-primary">
-                        <i class="fas fa-folder-open"></i> <span data-i18n="load.file">选择ELF文件</span>
+            <!-- 文件上传 -->
+            <section class="file-section">
+                <h3><i class="fas fa-file-upload"></i> <span data-i18n="load.filetile"></span></h3>
+                <div class="file-controls">
+                    <input type="file" id="file-input" accept=".elf,.out,.bin" style="display: none;">
+                    <button id="load-btn" class="btn btn-primary">
+                        <i class="fas fa-folder-open"></i> <span data-i18n="load.file"></span>
                     </button>
-                    <div id="file-info" class="file-info" style="display: none;">
-                        <i class="fas fa-file"></i>
-                        <span id="file-name"></span>
-                        <button id="clear-file-btn" class="btn-small">
-                            <i class="fas fa-times"></i>
-                        </button>
-                    </div>
+                    <button id="clear-btn" class="btn btn-secondary" disabled>
+                        <i class="fas fa-times"></i> <span data-i18n="clear">清除</span>
+                    </button>
+                </div>
+                <div id="file-info" class="file-info" style="display: none;">
+                    <i class="fas fa-file"></i>
+                    <span id="file-name">No file selected</span>
                 </div>
             </section>
 
@@ -126,6 +126,9 @@
                 <button id="toggle-cpu-monitor" class="tool-btn" data-tool="cpu-monitor">
                     <i class="fas fa-chart-line"></i> <span data-i18n="CPU监控">CPU监控</span>
                 </button>
+                <button id="toggle-elf-analyzer" class="tool-btn" data-tool="elf-analyzer">
+                                            <i class="fas fa-fire"></i> <span data-i18n="热点分析">热点分析</span>
+                </button>
             </div>
 
             <!-- 寄存器视图 (隐藏) -->
@@ -134,7 +137,7 @@
                     <h3><i class="fas fa-list"></i> <span data-i18n="registers">寄存器</span></h3>
                     <div class="panel-controls">
                         <div class="register-tabs">
-                            <button class="tab-btn active" data-tab="integer">
+                            <button class="tab-btn" data-tab="integer">
                                 <span data-i18n="integer.regs">整数寄存器</span>
                             </button>
                             <button class="tab-btn" data-tab="float">
@@ -150,7 +153,7 @@
                     </div>
                 </div>
                 <div class="panel-content">
-                    <div id="integer-regs" class="register-grid active">
+                    <div id="integer-regs" class="register-grid">
                         <!-- 整数寄存器内容将由 JavaScript 生成 -->
                     </div>
                     <div id="float-regs" class="register-grid">
@@ -199,7 +202,7 @@
                     <h3><i class="fas fa-code"></i> <span data-i18n="disassembly">反汇编</span></h3>
                     <div class="panel-controls">
                         <div class="code-controls">
-                            <button id="auto-follow" class="btn btn-small active">
+                            <button id="auto-follow" class="btn btn-small">
                                 <i class="fas fa-crosshairs"></i> <span data-i18n="follow.pc">跟随PC</span>
                             </button>
                         </div>
@@ -238,6 +241,21 @@
                 </div>
                 <div class="panel-content">
                     <!-- CPU监控器内容将由 JavaScript 生成 -->
+                </div>
+            </div>
+
+            <!-- 热点分析面板 -->
+            <div id="elf-analyzer-panel" class="view-panel tool-panel" style="display: none;">
+                <div class="panel-header">
+                    <h3><i class="fas fa-fire"></i> <span data-i18n="热点分析">热点分析</span></h3>
+                    <div class="panel-controls">
+                        <button class="close-panel-btn" data-panel="elf-analyzer">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="panel-content">
+                    <!-- 热点分析内容将由 JavaScript 生成 -->
                 </div>
             </div>
 
@@ -284,6 +302,8 @@
     <script src="/socket.io/socket.io.js"></script>
     <script src="lang.js"></script>
     <script src="src/cpu-monitor.js"></script>
+    <script src="src/elf-analyzer.js"></script>
+    <script src="src/elf-analyzer-ui.js"></script>
     <script src="app.js"></script>
 </body>
 </html> 

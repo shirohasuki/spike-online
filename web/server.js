@@ -2,58 +2,78 @@
 const express = require('express');
 const http = require('http');
 const socketIO = require('socket.io');
-const { spawn } = require('child_process');
 const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server);
 
-// 创建临时文件目录
+// 静态文件服务
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/src', express.static(path.join(__dirname, 'src')));
+
+// 确保temp目录存在
 const tempDir = path.join(__dirname, 'temp');
 if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// 配置multer用于文件上传
+// 文件上传配置 - 保留原始文件名
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
+    destination: function (req, file, cb) {
         cb(null, tempDir);
     },
-    filename: (req, file, cb) => {
-        const uniqueName = uuidv4() + '-' + file.originalname;
-        cb(null, uniqueName);
+    filename: function (req, file, cb) {
+        // 保留原始文件名，如果重复则添加时间戳
+        const ext = path.extname(file.originalname);
+        const name = path.basename(file.originalname, ext);
+        const timestamp = Date.now();
+        const finalName = `${name}_${timestamp}${ext}`;
+        cb(null, finalName);
     }
 });
 
-const upload = multer({ 
+const upload = multer({
     storage: storage,
-    limits: {
-        fileSize: 100 * 1024 * 1024 // 100MB限制
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB限制
+    fileFilter: (req, file, cb) => {
+        // 允许ELF文件和常见的可执行文件
+        const allowedTypes = ['.elf', '.out', '.bin', ''];
+        const ext = path.extname(file.originalname).toLowerCase();
+        cb(null, allowedTypes.includes(ext) || !ext);
     }
 });
 
-// 静态文件服务
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/src', express.static(path.join(__dirname, 'src')));
-
-// 文件上传接口
+// 文件上传路由
 app.post('/upload', upload.single('elfFile'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, error: 'No file uploaded' });
+        }
+
+        // 检查文件是否为有效的ELF文件
+        const filePath = req.file.path;
+        const fileBuffer = fs.readFileSync(filePath);
+        
+        // 基本的ELF魔数检查
+        if (fileBuffer.length < 4 || fileBuffer.toString('hex', 0, 4) !== '7f454c46') {
+            fs.unlinkSync(filePath); // 删除无效文件
+            return res.status(400).json({ success: false, error: 'Invalid ELF file' });
+        }
+
+        res.json({
+            success: true,
+            filename: req.file.filename,
+            originalName: req.file.originalname,
+            path: filePath
+        });
+    } catch (error) {
+        console.error('Upload error:', error);
+        res.status(500).json({ success: false, error: 'Upload failed' });
     }
-    
-    console.log('File uploaded:', req.file.filename);
-    res.json({ 
-        success: true, 
-        filename: req.file.filename,
-        originalName: req.file.originalname,
-        path: req.file.path
-    });
 });
 
 // 调试会话管理
@@ -63,19 +83,11 @@ class DebugSession {
     constructor(socketId) {
         this.socketId = socketId;
         this.spikeProcess = null;
-        this.currentFile = null;
-        this.currentFilePath = null;
         this.isRunning = false;
-        this.autoStep = false;
-        this.autoExecuting = false;  // 控制是否自动执行
-        this.showLog = false;
-        this.showMemory = false;
-        this.registers = {
-            integer: new Array(32).fill(0),
-            float: new Array(32).fill(0),
-            csr: {}
-        };
-        this.memory = new Map();
+        this.isInitialized = false;  // 添加初始化完成标志
+        this.isContinuousMode = false;  // 新增：跟踪是否在连续执行模式
+        this.waitingForOutput = false;  // 新增：等待指令输出完成
+        this.waitingForFrontend = false;  // 新增：等待前端处理完成
         this.pc = 0;
         this.instructionCount = 0;
     }
@@ -85,431 +97,497 @@ class DebugSession {
             this.stopDebug();
         }
 
-        const { filename, autoStep, showLog, showMemory } = options;
-        this.currentFile = filename;
-        this.currentFilePath = path.join(tempDir, filename);
-        this.autoStep = autoStep;
-        this.showLog = showLog;
-        this.showMemory = showMemory;
-
-        // 检查文件是否存在
-        if (!fs.existsSync(this.currentFilePath)) {
+        const { filename } = options;
+        const projectRoot = path.join(__dirname, '..');
+        const elfFilePath = path.join(projectRoot, 'web', 'temp', filename);  // 用于文件存在性检查
+        
+        // 检查ELF文件是否存在
+        if (!fs.existsSync(elfFilePath)) {
             io.to(this.socketId).emit('debug-output', {
                 type: 'error',
-                message: `File not found: ${filename}`,
+                message: `❌ ELF文件未找到: ${filename}`,
                 timestamp: new Date()
             });
             return;
         }
 
-        // 构建spike命令参数
-        const args = [];
+        console.log('Starting Spike with interactive debugging...');
         
-        // 总是启用日志来查看执行情况
-        args.push('-l'); // 生成执行日志
-        args.push('--log-commits'); // 提交信息日志
+        // 发送启动消息到前端日志区
+        io.to(this.socketId).emit('debug-output', {
+            type: 'info',
+            message: '🚀 正在启动 Spike 调试器...',
+            timestamp: new Date()
+        });
         
-        // 使用交互式调试模式
-        if (autoStep) {
-            args.push('-d'); // 交互式调试模式
-            args.push('-H'); // 启动时暂停，等待调试器连接
-        }
+        // Spike调试器参数：使用交互式调试模式
+        const args = [
+            '-d',                     // 启用交互式调试模式
+            elfFilePath           // 使用相对于项目根目录的路径
+        ];
 
-        // 添加ELF文件路径
-        args.push(this.currentFilePath);
-
-        console.log('Starting spike with args:', args);
+        // 启动Spike进程 - 使用绝对路径确保找到正确的spike可执行文件
+        const spikePath = path.join(projectRoot, 'build', 'spike');
+        console.log(`Spawning Spike process: ${spikePath}`);
+        console.log(`Arguments: ${args.join(' ')}`);
+        console.log(`Working directory: ${projectRoot}`);
         
-        // 使用正确的spike路径
-        const spikePath = path.join(__dirname, '..', 'build', 'spike');
-        console.log('Spike path:', spikePath);
-        
-        // 检查spike可执行文件是否存在
-        if (!fs.existsSync(spikePath)) {
-            io.to(this.socketId).emit('debug-output', {
-                type: 'error',
-                message: `Spike executable not found at: ${spikePath}`,
-                timestamp: new Date()
-            });
-            return;
-        }
-
-        // 使用pty启动spike进程
         this.spikeProcess = pty.spawn(spikePath, args, {
             name: 'xterm-color',
             cols: 80,
             rows: 24,
-            cwd: path.dirname(spikePath),
-            env: { ...process.env, TERM: 'xterm-256color' }
+            cwd: projectRoot,  // 确保工作目录是项目根目录
+            env: process.env
         });
-
-        if (!this.spikeProcess) {
-            io.to(this.socketId).emit('debug-output', {
-                type: 'error',
-                message: 'Failed to start spike process',
-                timestamp: new Date()
-            });
-            return;
-        }
 
         this.isRunning = true;
-        
-        // 处理pty输出
+
         this.spikeProcess.on('data', (data) => {
-            const output = data.toString();
-            // 过滤掉回显的字符，只保留有意义的输出
-            const cleanOutput = this.cleanSpikeOutput(output);
-            if (cleanOutput) {
-                console.log('Spike clean output:', JSON.stringify(cleanOutput));
-                this.handleSpikeOutput(cleanOutput);
-            }
+            this.handleSpikeOutput(data);
         });
 
-        // 处理进程退出
         this.spikeProcess.on('exit', (code, signal) => {
-            console.log('Spike process exited with code:', code, 'signal:', signal);
-            this.isRunning = false;
-            io.to(this.socketId).emit('debug-stopped');
+            console.log(`Spike process exited with code ${code}, signal: ${signal}`);
+            
+            // 发送退出消息到前端日志区
+            let messageType, message;
+            
+            if (code === 0) {
+                messageType = 'info';
+                message = `🏁 仿真正常结束 (退出码: ${code})`;
+            } else if (code === 1) {
+                messageType = 'error';
+                message = `❌ 仿真异常结束 - 程序失败 (退出码: ${code})`;
+            } else if (code === null || code === 130) {
+                messageType = 'warning';
+                message = `⏸️ 仿真被用户中断 (SIGINT)`;
+            } else {
+                messageType = 'warning';
+                message = `⚠️ 仿真异常结束 (退出码: ${code})`;
+            }
+                
             io.to(this.socketId).emit('debug-output', {
-                type: 'info',
-                message: `Spike process exited with code ${code}`,
+                type: messageType,
+                message: message,
                 timestamp: new Date()
             });
+            
+            // 停止连续执行
+            this.isContinuousMode = false;
+            this.waitingForOutput = false;
+            this.waitingForFrontend = false;
+            
+            this.isRunning = false;
+            this.spikeProcess = null;  // 清理进程引用
+            io.to(this.socketId).emit('debug-stopped');
         });
 
-        // 通知客户端调试已开始
-        io.to(this.socketId).emit('debug-started');
-        
-        // 等待spike进程启动，但不自动执行
-        // 用户需要手动点击"继续"或"单步"来开始执行
-        setTimeout(() => {
+        // 添加错误处理
+        this.spikeProcess.on('error', (error) => {
+            console.error(`Spike process error:`, error);
+            
             io.to(this.socketId).emit('debug-output', {
-                type: 'info',
-                message: 'Spike debugger ready. Use Continue or Step to start execution.',
+                type: 'error',
+                message: `❌ Spike进程错误: ${error.message}`,
                 timestamp: new Date()
             });
-        }, 2000);
-    }
-
-    handleSpikeOutput(output) {
-        const lines = output.split('\n');
-        
-        for (const line of lines) {
-            const trimmedLine = line.trim();
-            if (!trimmedLine) continue;
             
-            // 检查是否是spike提示符
-            if (trimmedLine === '(spike)') {
+            // 停止连续执行
+            this.isContinuousMode = false;
+            this.waitingForOutput = false;
+            this.waitingForFrontend = false;
+            
+            this.isRunning = false;
+            this.spikeProcess = null;
+            io.to(this.socketId).emit('debug-stopped');
+        });
+
+        // 等待Spike启动后发送初始化命令
+        setTimeout(() => {
+            if (this.isRunning) {
+                console.log('Spike started, checking interactive mode...');
+                
+                // 发送启动成功消息到前端日志区
                 io.to(this.socketId).emit('debug-output', {
-                    type: 'prompt',
-                    message: trimmedLine,
+                    type: 'info',
+                    message: '✅ Spike 调试器启动成功，进入交互模式',
                     timestamp: new Date()
                 });
                 
-                // 只有在明确启用自动模式时才自动执行下一步
-                if (this.autoStep && this.isRunning && this.autoExecuting) {
-                    setTimeout(() => {
-                        this.sendCommand('run 1');
-                    }, 100);
+                // 首先发送help命令测试交互模式
+                // this.spikeProcess.write('help\n');
+                // 不发送空行，直接通知前端调试已启动
+                setTimeout(() => {
+                    // 移除自动发送空行，避免自动执行第一条指令
+                    // this.spikeProcess.write('\n');
+                    
+                    // 设置初始化完成标志
+                    this.isInitialized = true;
+                    io.to(this.socketId).emit('debug-started');
+                }, 500);
+            }
+        }, 1500);
+    }
+
+    handleSpikeOutput(output) {
+        const outputStr = output.toString();
+        
+        // 清理ANSI转义序列
+        const cleanOutput = outputStr.replace(/\x1b\[[0-9;]*[mGKHf]/g, '').replace(/\r/g, '');
+        
+        // 分割输出行并处理每一行
+        const lines = cleanOutput.split('\n');
+        
+        for (let line of lines) {
+            line = line.trim();
+            if (!line) continue;
+            
+            // 检查是否是Spike提示符（表示命令执行完成）
+            if (this.containsSpikePrompt(line)) {
+                // 如果在连续执行模式且正在等待输出，标记后端处理完成，但等待前端确认
+                if (this.isContinuousMode && this.waitingForOutput && this.isRunning) {
+                    this.waitingForOutput = false;
+                    this.waitingForFrontend = true; // 新增：等待前端处理完成的标志
                 }
+                
+                // 但是如果包含重要信息，则不过滤
+                if (this.isImportantMessage(line)) {
+                    console.log(`Important message in spike prompt: ${line}`);
+                } else {
+                    continue;
+                }
+            }
+            
+            // 跳过纯命令回显（只包含 run、r、run 1 等命令的行）
+            if (this.isCommandEcho(line)) {
                 continue;
             }
             
-            // 解析执行日志
-            if (trimmedLine.includes('core') && trimmedLine.includes(':')) {
-                this.parseExecutionLog(trimmedLine);
-            }
+            // 检查是否是仿真结束信号并设置合适的消息类型
+            const messageType = this.getMessageType(line);
             
-            // 发送原始输出到客户端
+            // 发送有意义的输出到前端
             io.to(this.socketId).emit('debug-output', {
-                type: 'debug',
-                message: trimmedLine,
+                type: messageType,
+                message: line,
+                timestamp: new Date()
+            });
+            
+            // 解析执行日志更新状态
+            this.parseExecutionLog(line);
+        }
+    }
+    
+    isCommandEcho(line) {
+        // 检查是否是命令回显
+        const commandPatterns = [
+            /^r+$/,                       // 只包含 r 字符
+            /^ru+$/,                      // r和u的组合
+            /^run+$/,                     // run的部分或完整输入
+            /^run 1$/,                    // 完整的 run 1 命令
+            /^run$/,                      // 完整的 run 命令
+            /^help$/,                     // help 命令
+            /^[rnu ]+$/,                  // 只包含 r, u, n, 空格的组合
+            /^\(spike\)\s*[run1 ]*$/,     // spike提示符后跟命令片段
+            /^\(spike\)\s*r$/,            // spike提示符后跟单个r
+            /^\(spike\)\s*ru$/,           // spike提示符后跟ru
+            /^\(spike\)\s*run$/,          // spike提示符后跟run
+            /^\(spike\)\s*run 1$/,        // spike提示符后跟run 1
+            /^[r ]+$/,                    // 只包含r和空格
+            /^[ru ]+$/,                   // 只包含r、u和空格
+        ];
+        
+        return commandPatterns.some(pattern => pattern.test(line));
+    }
+    
+    containsSpikePrompt(line) {
+        // 检查是否是纯Spike提示符行（需要过滤）
+        // 但不过滤包含指令执行信息的行
+        
+        // 如果行只包含(spike)提示符（可能还有空格），则过滤
+        if (/^\s*\(spike\)\s*$/.test(line)) {
+            return true;
+        }
+        
+        // 如果行包含core执行信息，则不过滤（即使包含spike提示符）
+        if (line.includes('core') && line.includes('0x')) {
+            return false;
+        }
+        
+        // 其他包含(spike)的行可能是命令回显，需要过滤
+        return line.includes('(spike)');
+    }
+    
+    getMessageType(line) {
+        // 识别不同类型的消息并返回合适的类型
+        
+        // 仿真结束信号
+        if (line.includes('*** FAILED ***')) {
+            return 'error';
+        }
+        
+        // 成功退出信号
+        if (line.includes('*** PASSED ***') || line.match(/tohost\s*=\s*1/)) {
+            return 'info';
+        }
+        
+        // 错误和异常信息
+        if (line.includes('ERROR') || line.includes('EXCEPTION') || 
+            line.includes('ABORT') || line.includes('FAULT')) {
+            return 'error';
+        }
+        
+        // 警告信息
+        if (line.includes('WARNING') || line.includes('WARN')) {
+            return 'warning';
+        }
+        
+        // 系统调用退出相关
+        if (line.includes('exit') || line.includes('Exit') || 
+            line.includes('tohost') || line.includes('sys_exit')) {
+            return 'warning';
+        }
+        
+        // 默认为信息类型
+        return 'info';
+    }
+    
+    isImportantMessage(line) {
+        // 检查是否是重要信息，即使包含(spike)也不应该被过滤
+        const importantPatterns = [
+            /\*\*\* FAILED \*\*\*/,
+            /\*\*\* PASSED \*\*\*/,
+            /tohost\s*=/,
+            /ERROR/i,
+            /EXCEPTION/i,
+            /ABORT/i,
+            /FAULT/i,
+            /exit/i,
+            /halt/i,
+            /terminate/i,
+            /finish/i,
+            /end/i
+        ];
+        
+        return importantPatterns.some(pattern => pattern.test(line));
+    }
+    
+    checkForExitPatterns(instruction, pc) {
+        // 检查是否是程序退出相关的指令模式
+        
+        // ECALL指令 - 通常用于系统调用
+        if (instruction.includes('ecall')) {
+            console.log(`Detected ECALL at PC: ${pc}`);
+            // 停止连续执行模式
+            this.isContinuousMode = false;
+            this.waitingForOutput = false;
+            this.waitingForFrontend = false;
+            
+            io.to(this.socketId).emit('debug-output', {
+                type: 'warning',
+                message: `🚪 检测到系统调用 (ecall) at PC: ${pc}，自动停止连续执行`,
+                timestamp: new Date()
+            });
+        }
+        
+        // EBREAK指令 - 通常用于调试断点或程序结束
+        if (instruction.includes('ebreak')) {
+            // 停止连续执行模式
+            this.isContinuousMode = false;
+            this.waitingForOutput = false;
+            this.waitingForFrontend = false;
+            
+            io.to(this.socketId).emit('debug-output', {
+                type: 'warning',
+                message: `💡 检测到断点指令 (ebreak) at PC: ${pc}，自动停止连续执行`,
+                timestamp: new Date()
+            });
+        }
+        
+        // WFI指令 - 等待中断，可能表示程序进入等待状态
+        if (instruction.includes('wfi')) {
+            // 停止连续执行模式
+            this.isContinuousMode = false;
+            this.waitingForOutput = false;
+            this.waitingForFrontend = false;
+            
+            io.to(this.socketId).emit('debug-output', {
+                type: 'info',
+                message: `⏸️ 程序进入等待状态 (wfi) at PC: ${pc}，自动停止连续执行`,
                 timestamp: new Date()
             });
         }
     }
+    
+    isSpikePromptLine(line) {
+        // 检查是否是Spike提示符行（包含命令回显的提示符行）
+        const promptPatterns = [
+            /^\(spike\)\s*$/,                    // 纯提示符
+            /^\(spike\)\s+[rnu ]+$/,            // 提示符后跟部分命令
+            /^\(spike\)\s+r\s*$/,               // 提示符后跟单个r
+            /^\(spike\)\s+ru\s*$/,              // 提示符后跟ru
+            /^\(spike\)\s+run\s*$/,             // 提示符后跟run
+            /^\(spike\)\s+run\s+1\s*$/,         // 提示符后跟run 1
+            /^\(spike\)\s*[rnu ]*\(spike\)/,    // 包含多个提示符的行
+            /^.*\(spike\)\s*[rnu ]*$/,          // 以命令回显+提示符结尾
+        ];
+        
+        return promptPatterns.some(pattern => pattern.test(line));
+    }
 
     parseExecutionLog(logLine) {
-        // 匹配两种格式：
-        // 1. 指令行（无特权级）: "core 0: 0x0000000000000818 (0x10802023) sw s0, 256(zero)"
-        // 2. 结果行（有特权级）: "core 0: 3 0x0000000000000818 (0x10802023) mem 0x0000000000000100 0x00000000"
-        const match = logLine.match(/core\s+(\d+):\s+(?:(\d+)\s+)?(0x[0-9a-fA-F]+)\s+\((0x[0-9a-fA-F]+)\)\s+(.+)/);
+        // 只有在初始化完成后才处理指令执行，避免自动执行第一条指令
+        if (!this.isInitialized) {
+            return;
+        }
+        
+        // 解析core执行行
+        const match = logLine.match(/^core\s+(\d+):\s+(?:(\d+)\s+)?(0x[0-9a-fA-F]+)\s+\((0x[0-9a-fA-F]+)\)\s*(.*)$/);
         if (match) {
             const [, core, priv, pc, instruction, disasm] = match;
             
-            // 检查反汇编内容是否是寄存器/内存信息
-            const trimmedDisasm = disasm.trim();
-            const isRegisterMemoryInfo = trimmedDisasm.match(/^(x\d+|f\d+|c\d+_\w+)\s+0x[0-9a-fA-F]+$/) || 
-                                       trimmedDisasm.match(/^mem\s+0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+$/) ||
-                                       trimmedDisasm === 'mem';
-            
-            // 如果是寄存器/内存信息，跳过处理
-            if (isRegisterMemoryInfo) {
-                console.log('Server: Skipping register/memory info:', trimmedDisasm);
-                return;
-            }
-            
-            // 只有真正的指令才更新状态
-            if (!priv) { // 没有特权级数字的行才是指令行
-                console.log('Server: Found instruction:', trimmedDisasm);
+            if (disasm && disasm.trim()) {
+                // 移除特权级检查，只要有反汇编信息就认为是有效指令
                 this.pc = parseInt(pc, 16);
                 this.instructionCount++;
                 
-                // 发送PC更新
-                io.to(this.socketId).emit('pc-update', this.pc);
+                // 只在非连续模式或每100条指令时输出调试信息
+                if (!this.isContinuousMode || this.instructionCount % 100 === 0) {
+                    console.log(`Processing instruction ${this.instructionCount}: ${disasm.trim()} at PC ${pc}`);
+                }
                 
-                // 发送指令更新
-                io.to(this.socketId).emit('instruction-update', trimmedDisasm);
-                
-                // 发送反汇编代码更新
-                io.to(this.socketId).emit('code-update', {
+                // 合并PC和指令更新为一个消息，减少消息数量
+                io.to(this.socketId).emit('execution-update', {
                     pc: this.pc,
-                    instruction: instruction,
-                    disasm: trimmedDisasm
+                    count: this.instructionCount,
+                    current: disasm.trim()
                 });
                 
-                // 模拟寄存器更新（在实际实现中需要从spike获取真实数据）
-                this.simulateRegisterUpdate();
+                // 检查是否是程序退出相关的指令
+                this.checkForExitPatterns(disasm.trim(), pc);
                 
-                // 如果启用了内存显示，模拟内存更新
-                if (this.showMemory) {
-                    this.simulateMemoryUpdate();
-                }
-            } else {
-                console.log('Server: Skipping result line with privilege level:', priv, trimmedDisasm);
+                // 注意：不在这里触发下一条指令，而是等待 Spike 提示符出现
             }
         }
-    }
-
-    simulateRegisterUpdate() {
-        // 这里是模拟数据，实际应该从spike获取真实的寄存器值
-        // 为了演示，我们随机修改一些寄存器值
-        const regIndex = Math.floor(Math.random() * 32);
-        this.registers.integer[regIndex] = Math.floor(Math.random() * 0xFFFFFFFF);
-        
-        io.to(this.socketId).emit('register-update', {
-            type: 'integer',
-            values: this.registers.integer
-        });
-    }
-
-    simulateMemoryUpdate() {
-        // 模拟内存更新
-        const baseAddr = 0x10000000;
-        const values = [];
-        for (let i = 0; i < 64; i++) {
-            values.push(Math.floor(Math.random() * 256));
-        }
-        
-        io.to(this.socketId).emit('memory-update', {
-            address: baseAddr,
-            size: values.length,
-            values: values
-        });
     }
 
     sendCommand(command) {
         if (this.spikeProcess && this.isRunning) {
-            console.log(`Sending command to spike: "${command}"`);
-            this.spikeProcess.write(command + '\r');  // 使用\r而不是\n
-            
-            // 发送命令到客户端显示
-            io.to(this.socketId).emit('debug-output', {
-                type: 'command',
-                message: `> ${command}`,
-                timestamp: new Date()
-            });
+            console.log(`Sending command to Spike: "${command}"`);
+            this.spikeProcess.write(command + '\n');
+        } else {
+            console.log('Spike process not running, cannot send command');
         }
     }
 
     pauseDebug() {
-        if (this.spikeProcess && this.isRunning) {
-            // 停止自动执行
-            this.autoExecuting = false;
-            
-            // 发送Ctrl+C中断执行
-            this.spikeProcess.write('\x03');  // Ctrl+C
-            io.to(this.socketId).emit('debug-output', {
-                type: 'info',
-                message: 'Debug paused - use step to continue',
-                timestamp: new Date()
-            });
-        }
+        // 停止连续执行模式
+        this.isContinuousMode = false;
+        this.waitingForOutput = false;
+        this.waitingForFrontend = false;
+        
+        io.to(this.socketId).emit('debug-output', {
+            type: 'warning',
+            message: '⏸️ 连续执行已暂停',
+            timestamp: new Date()
+        });
     }
 
     stepDebug() {
-        if (this.spikeProcess && this.isRunning) {
-            this.sendCommand('run 1');  // 执行1条指令
-        }
+        this.sendCommand('run 1');  // 单步执行一条指令
     }
+    
+
 
     continueDebug() {
-        if (this.spikeProcess && this.isRunning) {
-            // 启用自动执行模式
-            this.autoExecuting = true;
-            this.sendCommand('run 1');  // 开始单步执行
+        // 启动连续执行模式 - 基于输出反馈执行
+        this.isContinuousMode = true;
+        this.executeNextInstruction();
+        
+        io.to(this.socketId).emit('debug-output', {
+            type: 'info',
+            message: '▶️ 开始连续执行模式 (基于指令完成反馈)',
+            timestamp: new Date()
+        });
+    }
+    
+    executeNextInstruction() {
+        if (!this.isContinuousMode || !this.isRunning || this.waitingForOutput || this.waitingForFrontend || !this.spikeProcess) {
+            return;
+        }
+        
+        // 标记正在等待输出
+        this.waitingForOutput = true;
+        
+        // 发送 run 1 命令
+        this.sendCommand('run 1');
+    }
+    
+    onFrontendReady() {
+        if (this.waitingForFrontend && this.isContinuousMode && this.isRunning) {
+            this.waitingForFrontend = false;
+            this.executeNextInstruction();
         }
     }
 
     resetDebug() {
-        // 停止当前调试会话
-        this.stopDebug();
+        // 停止连续执行
+        this.isContinuousMode = false;
+        this.waitingForOutput = false;
+        this.waitingForFrontend = false;
         
-        // 重置状态
-        this.pc = 0;
-        this.instructionCount = 0;
-        this.registers.integer.fill(0);
-        this.registers.float.fill(0);
-        this.registers.csr = {};
-        this.memory.clear();
-        this.autoExecuting = false;  // 重置时停止自动执行
-        
-        // 通知客户端重置完成
-        io.to(this.socketId).emit('debug-reset');
+        // 发送重置消息到前端日志区
         io.to(this.socketId).emit('debug-output', {
-            type: 'info',
-            message: 'Debug session reset. Click Start to begin new session.',
+            type: 'warning',
+            message: '🔄 调试会话已重置',
             timestamp: new Date()
         });
         
-        // 如果有文件，自动重新启动调试会话（但不自动执行）
-        if (this.currentFile && this.currentFilePath) {
-            setTimeout(() => {
-                const options = {
-                    filename: this.currentFile,
-                    autoStep: this.autoStep,
-                    showLog: this.showLog,
-                    showMemory: this.showMemory
-                };
-                this.startDebug(options);
-            }, 1000);  // 等待1秒后重新启动
-        }
+        this.isInitialized = false;  // 重置初始化标志
+        this.stopDebug();
+        io.to(this.socketId).emit('debug-reset');
     }
 
     stopDebug() {
+        // 停止连续执行
+        this.isContinuousMode = false;
+        this.waitingForOutput = false;
+        this.waitingForFrontend = false;
+        
         if (this.spikeProcess) {
-            this.isRunning = false;
-            
-                    // 尝试优雅地终止进程
-        this.spikeProcess.write('quit\r');
-            
-            setTimeout(() => {
-                if (this.spikeProcess && !this.spikeProcess.killed) {
-                    this.spikeProcess.kill('SIGTERM');
-                    
-                    setTimeout(() => {
-                        if (this.spikeProcess && !this.spikeProcess.killed) {
-                            this.spikeProcess.kill('SIGKILL');
-                        }
-                    }, 2000);
-                }
-            }, 1000);
-            
+            this.spikeProcess.kill();
             this.spikeProcess = null;
         }
-    }
-
-    readMemory(address, size) {
-        // 在实际实现中，这里应该向spike发送内存读取命令
-        // 现在我们模拟返回一些数据
-        const values = [];
-        for (let i = 0; i < size; i++) {
-            values.push(Math.floor(Math.random() * 256));
-        }
         
-        io.to(this.socketId).emit('memory-update', {
-            address: address,
-            size: size,
-            values: values
-        });
+        this.isRunning = false;
+        this.isInitialized = false;  // 重置初始化标志
+        io.to(this.socketId).emit('debug-stopped');
     }
 
-    // 新增：获取性能统计数据
-    getPerformanceStats() {
-        // 从spike进程中提取性能数据
-        if (!this.isRunning) {
-            return {
-                minstret: 0,
-                mcycle: 0,
-                pc: this.pc,
-                instructionCount: this.instructionCount,
-                icacheAccess: 0,
-                icacheMiss: 0,
-                dcacheAccess: 0,
-                dcacheMiss: 0,
-                memoryAccess: false
-            };
-        }
-
-        // 基于真实执行状态的性能数据
-        const stats = {
-            minstret: this.instructionCount,
-            mcycle: Math.floor(this.instructionCount * (1.1 + Math.random() * 0.3)), // 模拟CPI 1.1-1.4
-            pc: this.pc,
-            instructionCount: this.instructionCount,
-            icacheAccess: this.instructionCount,
-            icacheMiss: Math.floor(this.instructionCount * (0.02 + Math.random() * 0.03)), // 2-5% miss rate
-            dcacheAccess: Math.floor(this.instructionCount * (0.25 + Math.random() * 0.15)), // 25-40% memory instructions
-            dcacheMiss: Math.floor(this.instructionCount * (0.01 + Math.random() * 0.02)), // 1-3% miss rate
-            memoryAccess: this.instructionCount > 0,
-            timestamp: Date.now()
+    async getPerformanceStats() {
+        // 简化的性能统计 - 返回基本数据
+        return {
+            icacheAccesses: 0,
+            icacheMisses: 0,
+            dcacheAccesses: 0,
+            dcacheMisses: 0,
+            stallCycles: 0,
+            memoryAccessCycles: 0,
+            totalMemoryAccesses: 0,
+            totalCycles: this.instructionCount * 2, // 简单估算
+            totalInstructions: this.instructionCount
         };
-        
-        return stats;
     }
 
     cleanup() {
         this.stopDebug();
-        // 清理临时文件
-        if (this.currentFilePath && fs.existsSync(this.currentFilePath)) {
-            try {
-                fs.unlinkSync(this.currentFilePath);
-                console.log('Cleaned up temp file:', this.currentFilePath);
-            } catch (error) {
-                console.error('Failed to cleanup temp file:', error);
-            }
-        }
     }
 
     cleanSpikeOutput(output) {
-        // 移除ANSI转义序列和控制字符
-        let cleaned = output.replace(/\x1b\[[0-9;]*[mGKHf]/g, ''); // ANSI escape sequences
-        cleaned = cleaned.replace(/\x00/g, ''); // 删除空字符
-        
-        // 处理回显问题：移除 (spike) 后面跟着的单个字符回显
-        // 例如: "(spike) r(spike) ru(spike) run(spike) run (spike) run 1"
-        cleaned = cleaned.replace(/\(spike\)\s*[^\n\r]*(?=\(spike\))/g, '');
-        
-        // 清理多余的 (spike) 提示符，只保留最后一个
-        cleaned = cleaned.replace(/(\(spike\)\s*)+/g, '(spike) ');
-        
-        // 分割行并过滤，使用更宽松的分割方式
-        const lines = cleaned.split(/\r?\n/);
-        const filteredLines = [];
-        
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            const trimmed = line.trim();
-            
-            // 跳过空行
-            if (!trimmed) continue;
-            
-            // 保留 (spike) 提示符
-            if (trimmed === '(spike)') {
-                filteredLines.push(trimmed);
-                continue;
-            }
-            
-            // 保留包含 core 信息的执行日志行（不做过滤，让前端处理）
-            if (trimmed.includes('core') && trimmed.includes(':')) {
-                filteredLines.push(trimmed);
-                continue;
-            }
-            
-            // 跳过其他内容
-        }
-        
-        return filteredLines.join('\n');
+        // 基本清理 - 移除ANSI转义序列
+        let cleaned = output.replace(/\x1b\[[0-9;]*[mGKHf]/g, '');
+        cleaned = cleaned.replace(/\x00/g, '');
+        return cleaned.trim();
     }
 }
 
@@ -520,6 +598,12 @@ io.on('connection', (socket) => {
     // 创建调试会话
     const session = new DebugSession(socket.id);
     debugSessions.set(socket.id, session);
+    
+    // 发送连接确认
+    socket.emit('connection-confirmed', { 
+        socketId: socket.id,
+        timestamp: new Date()
+    });
     
     // 处理调试命令
     socket.on('start-debug', (options) => {
@@ -547,15 +631,17 @@ io.on('connection', (socket) => {
         session.resetDebug();
     });
     
-    socket.on('read-memory', (data) => {
-        console.log('Reading memory:', data);
-        session.readMemory(data.address, data.size);
-    });
-    
-    socket.on('get-performance-stats', () => {
-        const stats = session.getPerformanceStats();
+    socket.on('get-performance-stats', async () => {
+        const stats = await session.getPerformanceStats();
         socket.emit('performance-stats', stats);
     });
+    
+    socket.on('frontend-ready', () => {
+        console.log('Frontend ready for next instruction');
+        session.onFrontendReady();
+    });
+    
+
     
     socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);

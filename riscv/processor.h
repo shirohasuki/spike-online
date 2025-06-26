@@ -18,6 +18,9 @@
 #include "../fesvr/memif.h"
 #include "vector_unit.h"
 
+// Forward declaration for cache hierarchy
+struct cache_hierarchy_t;
+
 #define FIRST_HPMCOUNTER 3
 #define N_HPMCOUNTERS 29
 
@@ -328,6 +331,7 @@ public:
   void set_privilege(reg_t, bool);
   const char* get_privilege_string();
   void update_histogram(reg_t pc);
+  void update_dcache_stats(insn_t insn);
   const disassembler_t* get_disassembler() { return disassembler; }
 
   FILE *get_log_file() { return log_file; }
@@ -396,6 +400,18 @@ private:
   std::vector<insn_desc_t> instructions;
   std::vector<insn_desc_t> custom_instructions;
   std::unordered_map<reg_t,uint64_t> pc_histogram;
+  
+  // Performance data for each instruction
+  struct instruction_perf_t {
+    uint64_t executions;
+    uint64_t total_cycles;
+    uint64_t l1_cache_misses;
+    uint64_t l2_cache_misses;
+    bool is_memory_insn;
+    
+    instruction_perf_t() : executions(0), total_cycles(0), l1_cache_misses(0), l2_cache_misses(0), is_memory_insn(false) {}
+  };
+  std::unordered_map<reg_t, instruction_perf_t> instruction_perf;
 
   static const size_t OPCODE_CACHE_SIZE = 4095;
   opcode_cache_entry_t opcode_cache[OPCODE_CACHE_SIZE];
@@ -424,8 +440,67 @@ private:
 
   // Track repeated executions for processor_t::disasm()
   uint64_t last_pc, last_bits, executions;
+
+  // Performance counters for monitoring
+  struct performance_counters_t {
+    uint64_t icache_accesses;
+    uint64_t icache_misses;
+    uint64_t dcache_accesses;
+    uint64_t dcache_misses;
+    uint64_t l2_accesses;
+    uint64_t l2_misses;
+    uint64_t branch_count;
+    uint64_t branch_mispredictions;
+    uint64_t stall_cycles;
+    uint64_t memory_access_cycles;
+    uint64_t total_memory_accesses;
+    
+    performance_counters_t() : 
+      icache_accesses(0), icache_misses(0),
+      dcache_accesses(0), dcache_misses(0),
+      l2_accesses(0), l2_misses(0),
+      branch_count(0), branch_mispredictions(0),
+      stall_cycles(0), memory_access_cycles(0),
+      total_memory_accesses(0) {}
+      
+    void reset() {
+      icache_accesses = icache_misses = 0;
+      dcache_accesses = dcache_misses = 0;
+      l2_accesses = l2_misses = 0;
+      branch_count = branch_mispredictions = 0;
+      stall_cycles = memory_access_cycles = 0;
+      total_memory_accesses = 0;
+    }
+  } perf_counters;
+  
+  // Cache hierarchy for accurate cache simulation
+      cache_hierarchy_t* cache_hierarchy;
+  
+  // Accumulated extra cycles for cache misses and other delays
+  uint64_t extra_cycles;
+  
+  // Current instruction cache miss tracking
+  uint64_t current_instruction_l1_misses;
+  uint64_t current_instruction_l2_misses;
+  uint64_t current_instruction_extra_cycles;
+
 public:
   entropy_source es; // Crypto ISE Entropy source.
+  
+  // Performance counter access methods
+  const performance_counters_t& get_performance_counters() const { return perf_counters; }
+  void reset_performance_counters() { perf_counters.reset(); }
+  void add_cycles(uint64_t cycles) { extra_cycles += cycles; }
+  
+  // 直接进行cache访问模拟
+  void simulate_cache_access(reg_t addr, bool is_write);
+  
+  // Instruction performance data access
+  const std::unordered_map<reg_t, instruction_perf_t>& get_instruction_perf() const { return instruction_perf; }
+  const std::unordered_map<reg_t,uint64_t>& get_pc_histogram() const { return pc_histogram; }
+  
+  // Export instruction performance profile to JSON
+  void export_instruction_profile_to_json(const std::string& filename);
 
   reg_t n_pmp;
   reg_t lg_pmp_granularity;

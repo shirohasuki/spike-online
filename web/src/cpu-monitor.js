@@ -98,29 +98,67 @@ class CPUMonitor {
     }
 
     updateCachePerformance(state) {
-        // 使用服务器提供的真实缓存数据
-        if (state.icacheAccess !== undefined && state.icacheMiss !== undefined) {
-            this.performanceStats.icacheHits = state.icacheAccess - state.icacheMiss;
-            this.performanceStats.icacheMisses = state.icacheMiss;
-            
-            if (state.icacheAccess > 0) {
-                this.performanceStats.icacheHitRate = (this.performanceStats.icacheHits / state.icacheAccess) * 100;
-            }
-        }
+        // 更新ICache性能
+        const icacheAccesses = state.icacheAccesses || 0;
+        const icacheMisses = state.icacheMisses || 0;
+        const icacheHitRate = icacheAccesses > 0 ? ((icacheAccesses - icacheMisses) / icacheAccesses * 100) : 0;
         
-        if (state.dcacheAccess !== undefined && state.dcacheMiss !== undefined) {
-            this.performanceStats.dcacheHits = state.dcacheAccess - state.dcacheMiss;
-            this.performanceStats.dcacheMisses = state.dcacheMiss;
-            
-            if (state.dcacheAccess > 0) {
-                this.performanceStats.dcacheHitRate = (this.performanceStats.dcacheHits / state.dcacheAccess) * 100;
-            }
-        }
+        document.getElementById('icache-accesses').textContent = icacheAccesses.toLocaleString();
+        document.getElementById('icache-misses').textContent = icacheMisses.toLocaleString();
+        document.getElementById('icache-hit-rate').textContent = icacheHitRate.toFixed(2) + '%';
         
-        // 更新内存访问统计
-        if (state.memoryAccess !== undefined) {
-            this.performanceStats.memoryAccessCount = state.dcacheAccess || 0;
-        }
+        // 更新DCache性能
+        const dcacheAccesses = state.dcacheAccesses || 0;
+        const dcacheMisses = state.dcacheMisses || 0;
+        const dcacheHitRate = dcacheAccesses > 0 ? ((dcacheAccesses - dcacheMisses) / dcacheAccesses * 100) : 0;
+        
+        document.getElementById('dcache-accesses').textContent = dcacheAccesses.toLocaleString();
+        document.getElementById('dcache-misses').textContent = dcacheMisses.toLocaleString();
+        document.getElementById('dcache-hit-rate').textContent = dcacheHitRate.toFixed(2) + '%';
+        
+        // 更新Memory性能
+        const totalCycles = state.totalCycles || 0;
+        const totalInstructions = state.totalInstructions || 0;
+        const stallCycles = state.stallCycles || 0;
+        const memoryAccessCycles = state.memoryAccessCycles || 0;
+        const totalMemoryAccesses = state.totalMemoryAccesses || 0;
+        
+        document.getElementById('memory-stalls').textContent = stallCycles.toLocaleString();
+        document.getElementById('memory-latency').textContent = 
+            totalMemoryAccesses > 0 ? (memoryAccessCycles / totalMemoryAccesses).toFixed(2) : '0';
+        
+        // 计算和显示CPI/IPC
+        const cpi = totalInstructions > 0 ? (totalCycles / totalInstructions).toFixed(3) : '1.000';
+        const ipc = totalCycles > 0 ? (totalInstructions / totalCycles).toFixed(3) : '1.000';
+        
+        document.getElementById('cpi-value').textContent = cpi;
+        document.getElementById('ipc-value').textContent = ipc;
+        
+        // 更新ELF分析器中的性能数据显示
+        this.updateElfAnalyzerPerformance(state);
+    }
+    
+    updateElfAnalyzerPerformance(stats) {
+        // 更新ELF分析器中的运行时性能数据
+        const elements = {
+            'cache-miss-rate': stats.dcacheAccesses > 0 ? 
+                ((stats.dcacheMisses / stats.dcacheAccesses) * 100).toFixed(2) + '%' : '--',
+            'memory-cycles': (stats.memoryAccessCycles || 0).toLocaleString(),
+            'ipc-value': stats.totalCycles > 0 ? 
+                (stats.totalInstructions / stats.totalCycles).toFixed(3) : '--',
+            'total-cycles': (stats.totalCycles || 0).toLocaleString(),
+            'instructions-executed': (stats.totalInstructions || 0).toLocaleString(),
+            'cache-accesses': (stats.icacheAccesses + stats.dcacheAccesses || 0).toLocaleString(),
+            'cache-misses': (stats.icacheMisses + stats.dcacheMisses || 0).toLocaleString(),
+            'memory-stalls': (stats.stallCycles || 0).toLocaleString()
+        };
+        
+        Object.entries(elements).forEach(([id, value]) => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.textContent = value;
+            }
+        });
     }
 
     updateInstructionRegions(state) {

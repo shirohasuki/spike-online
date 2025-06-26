@@ -1,0 +1,205 @@
+{
+  "description": "BuckyBall Config",
+  "opcode": "0x7B",
+  "opcode_name": "CUSTOM_3",
+  "instruction_format": "R-type",
+  "hardware_config": {
+    "DIM": 16,
+    "SPAD_ADDR_LEN": 14,
+    "MEM_ADDR_LEN": 32,
+    "BANK_NUM": 4,
+    "BANK_ROWS": 4096,
+    "RF_BANKS": 2,
+    "BANK_ADDR_LEN": 12,
+    "BANK_SEL_LEN": 2,
+    "RF_ADDR_LEN": 4,
+    "XCUSTOM_ACC": 3
+  },
+  "register_formats": {
+    "mvin_rs1": {
+      "description": "MVIN指令rs1寄存器格式",
+      "fields": {
+        "base_dram_addr": {
+          "bits": "31:0",
+          "description": "DRAM基地址"
+        }
+      }
+    },
+    "mvin_rs2": {
+      "description": "MVIN指令rs2寄存器格式", 
+      "fields": {
+        "base_sp_addr": {
+          "bits": "SPAD_ADDR_LEN-1:0",
+          "description": "scratchpad基地址"
+        },
+        "rows": {
+          "bits": "SPAD_ADDR_LEN+9:SPAD_ADDR_LEN", 
+          "description": "要传输的行数"
+        }
+      }
+    },
+    "mvout_rs1": {
+      "description": "MVOUT指令rs1寄存器格式",
+      "fields": {
+        "base_dram_addr": {
+          "bits": "31:0",
+          "description": "DRAM基地址"
+        }
+      }
+    },
+    "mvout_rs2": {
+      "description": "MVOUT指令rs2寄存器格式",
+      "fields": {
+        "base_sp_addr": {
+          "bits": "SPAD_ADDR_LEN-1:0",
+          "description": "scratchpad基地址"
+        },
+        "rows": {
+          "bits": "SPAD_ADDR_LEN+9:SPAD_ADDR_LEN",
+          "description": "要传输的行数"
+        }
+      }
+    },
+    "mul_warp16_rs1": {
+      "description": "MUL_WARP16指令rs1寄存器格式",
+      "fields": {
+        "op1_addr": {
+          "bits": "SPAD_ADDR_LEN-1:0",
+          "description": "第一个操作数在scratchpad中的地址"
+        },
+        "op2_addr": {
+          "bits": "SPAD_ADDR_LEN*2-1:SPAD_ADDR_LEN",
+          "description": "第二个操作数在scratchpad中的地址"
+        }
+      }
+    },
+    "mul_warp16_rs2": {
+      "description": "MUL_WARP16指令rs2寄存器格式",
+      "fields": {
+        "wr_addr": {
+          "bits": "SPAD_ADDR_LEN-1:0",
+          "description": "结果写入scratchpad中的地址"
+        },
+        "iter": {
+          "bits": "SPAD_ADDR_LEN+9:SPAD_ADDR_LEN",
+          "description": "迭代次数"
+        }
+      }
+    },
+    "scatter_mvin_rs1": {
+      "description": "SCATTER_MVIN指令rs1寄存器格式",
+      "fields": {
+        "base_dram_addr": {
+          "bits": "31:0",
+          "description": "DRAM基地址"
+        }
+      }
+    },
+    "scatter_mvin_rs2": {
+      "description": "SCATTER_MVIN指令rs2寄存器格式",
+      "fields": {
+        "rf_bank": {
+          "bits": "0:0",
+          "description": "寄存器文件bank选择"
+        },
+        "count": {
+          "bits": "31:1",
+          "description": "要加载的索引数量"
+        }
+      }
+    },
+    "sparse_mul_rs1": {
+      "description": "SPARSE_MUL指令rs1寄存器格式",
+      "fields": {
+        "A_addr": {
+          "bits": "SPAD_ADDR_LEN-1:0",
+          "description": "矩阵A在scratchpad中的地址"
+        },
+        "B_addr": {
+          "bits": "SPAD_ADDR_LEN*2-1:SPAD_ADDR_LEN",
+          "description": "矩阵B在scratchpad中的地址"
+        }
+      }
+    },
+    "sparse_mul_rs2": {
+      "description": "SPARSE_MUL指令rs2寄存器格式",
+      "fields": {
+        "row_rf_bank": {
+          "bits": "0:0",
+          "description": "行索引寄存器文件bank"
+        },
+        "col_rf_bank": {
+          "bits": "1:1",
+          "description": "列指针寄存器文件bank"
+        },
+        "C_addr": {
+          "bits": "SPAD_ADDR_LEN+1:2",
+          "description": "结果矩阵C在scratchpad中的地址"
+        },
+        "nnz": {
+          "bits": "27:16",
+          "description": "非零元素数量"
+        }
+      }
+    }
+  },
+  "instructions": {
+    "bb_mvin": {
+      "funct7": 24,
+      "funct3": 0,
+      "name": "bb_mvin",
+      "description": "Move data into BuckyBall accelerator",
+      "operands": ["rs1", "rs2"],
+      "register_formats": ["mvin_rs1", "mvin_rs2"]
+    },
+    "bb_mvout": {
+      "funct7": 25,
+      "funct3": 0,
+      "name": "bb_mvout", 
+      "description": "Move data out of BuckyBall accelerator",
+      "operands": ["rs1", "rs2"],
+      "register_formats": ["mvout_rs1", "mvout_rs2"]
+    },
+    "bb_mul_warp16": {
+      "funct7": 32,
+      "funct3": 0,
+      "name": "bb_mul_warp16",
+      "description": "Matrix multiplication with warp16 pattern",
+      "operands": ["rs1", "rs2"],
+      "register_formats": ["mul_warp16_rs1", "mul_warp16_rs2"]
+    },
+    "bb_scatter_mvin": {
+      "funct7": 34,
+      "funct3": 0,
+      "name": "bb_scatter_mvin",
+      "description": "Scatter move data into BuckyBall accelerator", 
+      "operands": ["rs1", "rs2"],
+      "register_formats": ["scatter_mvin_rs1", "scatter_mvin_rs2"]
+    },
+    "bb_sparse_mul_addr": {
+      "funct7": 33,
+      "funct3": 0,
+      "name": "bb_sparse_mul_addr",
+      "description": "Sparse matrix multiplication addressing",
+      "operands": ["rs1", "rs2"],
+      "register_formats": ["sparse_mul_rs1", "sparse_mul_rs2"]
+    },
+    "bb_flush": {
+      "funct7": 7,
+      "funct3": 0,
+      "name": "bb_flush",
+      "description": "Flush accelerator",
+      "operands": [],
+      "register_formats": []
+    }
+  },
+  "c_macros": {
+    "BB_MVIN_FUNCT": 24,
+    "BB_MVOUT_FUNCT": 25,
+    "BB_MUL_FUNCT": 32,
+    "BB_SCATTER_MVIN_FUNCT": 34,
+    "BB_SPARSE_MUL_ADDR_FUNCT": 33,
+    "BB_FLUSH_FUNCT": 7,
+    "CUSTOM_3": "0x7B"
+  }
+}

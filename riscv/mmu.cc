@@ -6,6 +6,7 @@
 #include "simif.h"
 #include "processor.h"
 #include "decode_macros.h"
+#include "cache_model.h"
 
 mmu_t::mmu_t(simif_t* sim, endianness_t endianness, processor_t* proc)
  : sim(sim), proc(proc),
@@ -198,6 +199,12 @@ void mmu_t::load_slow_path_intrapage(reg_t len, uint8_t* bytes, mem_access_info_
   if (!access_info.flags.is_special_access() && vpn == (tlb_load_tag[vpn % TLB_ENTRIES] & ~TLB_CHECK_TRIGGERS)) {
     auto host_addr = tlb_data[vpn % TLB_ENTRIES].host_offset + transformed_addr;
     memcpy(bytes, host_addr, len);
+    
+    // TLB命中时进行cache模拟
+    if (unlikely(proc != nullptr)) {
+      reg_t paddr = tlb_data[vpn % TLB_ENTRIES].target_offset + transformed_addr;
+      proc->simulate_cache_access(paddr, false); // false表示读访问
+    }
     return;
   }
 
@@ -216,6 +223,11 @@ void mmu_t::load_slow_path_intrapage(reg_t len, uint8_t* bytes, mem_access_info_
 
   } else if (!mmio_load(paddr, len, bytes)) {
     throw trap_load_access_fault(access_info.effective_virt, transformed_addr, 0, 0);
+  }
+
+  // 使用物理地址进行cache模拟
+  if (unlikely(proc != nullptr)) {
+    proc->simulate_cache_access(paddr, false); // false表示读访问
   }
 
   if (access_info.flags.lr) {
@@ -262,6 +274,12 @@ void mmu_t::store_slow_path_intrapage(reg_t len, const uint8_t* bytes, mem_acces
     if (actually_store) {
       auto host_addr = tlb_data[vpn % TLB_ENTRIES].host_offset + transformed_addr;
       memcpy(host_addr, bytes, len);
+      
+      // TLB命中时进行cache模拟
+      if (unlikely(proc != nullptr)) {
+        reg_t paddr = tlb_data[vpn % TLB_ENTRIES].target_offset + transformed_addr;
+        proc->simulate_cache_access(paddr, true); // true表示写访问
+      }
     }
     return;
   }
@@ -277,6 +295,11 @@ void mmu_t::store_slow_path_intrapage(reg_t len, const uint8_t* bytes, mem_acces
         refill_tlb(addr, paddr, host_addr, STORE);
     } else if (!mmio_store(paddr, len, bytes)) {
       throw trap_store_access_fault(access_info.effective_virt, transformed_addr, 0, 0);
+    }
+
+    // 使用物理地址进行cache模拟
+    if (unlikely(proc != nullptr)) {
+      proc->simulate_cache_access(paddr, true); // true表示写访问
     }
   }
 }
